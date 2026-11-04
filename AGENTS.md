@@ -1,6 +1,28 @@
 This is an Expo/React Native mobile application. Prioritize mobile-first patterns, performance, and cross-platform compatibility.
 
-The app is a pokemon battle simulator while health works using a grid with blocks rather than normal numerical healthbars.
+## Game Design
+
+- This is a Pokémon battler with custom mechanics, not a simulator of the canonical games. Follow the mechanics below rather than assuming standard Pokémon battle rules.
+- Battles are raid-boss-style. Show the player's Pokémon on the left and the opponent on the right, facing each other. Pokémon sprites will come from a sprite folder when those assets are added; do not assume paths or assets that are not present.
+- The opponent's health is a variable-size grid of blocks, not a numerical health bar. Grid size depends on HP and Defense, with stronger Pokémon receiving larger grids. The exact scaling formula is undecided; do not invent or hard-code a balance formula without direction.
+- Show the player's four moves at the bottom of the battle screen. Tapping a move previews its attack pattern; dragging and dropping it onto the grid applies that pattern. Patterns are at most 3×3, and weaker moves use smaller patterns.
+- After the player attacks, the opponent attacks using one of its moves. Its attack-selection and other raid behavior are not yet defined. Do not invent those mechanics; keep any implementation limited to specified behavior. For now, opponent attacks damage the player's regular health bar.
+- The opponent faints when all grid blocks are removed.
+- The player can open the bag to use healing or revival items on a selected Pokémon from a party list.
+- Poké Ball catch success is calculated before its animation. Moving balls that teleport among grid squares are visual feedback only and must not reroll or change the result. A successful catch ends on an empty square; higher-level balls show more moving balls.
+- The player can select a Pokémon and use a switch action to change the active Pokémon. The switch interface can preview that Pokémon's moves.
+- Keep battle rules and outcomes separate from presentation and animation where practical, so visual effects cannot change gameplay results.
+
+## Product Specifications
+
+- Treat [specs/product.md](./specs/product.md) as the product overview and the files in [specs/features/](./specs/features/) as the detailed feature requirements. Update the relevant specification when behavior changes.
+- Use PokeAPI for Pokémon and move data through TanStack Query. Give every screen's data load a visible loading state, a useful error state, and a retry path.
+- Persist player progress in local SQLite so party, active Pokémon, inventory, and encounter progress survive app restarts.
+- Keep screen presentation, API/database access, and battle rules in separate modules. Put game rules in shared logic rather than embedding them in route components.
+- Use Expo Router for screens. The minimum product has distinct battle and party screens.
+- Prefer `assets/images/sprites/{zero-padded-id}.png` or `.jpg` when present; mirror the right-side opponent sprite. Use PokeAPI artwork as a fallback until local art is available.
+- Use haptic feedback for damage dealt, damage received, and every catch wobble. Haptics must never control game outcomes.
+- Keep undecided raid-boss behavior and balance formulas isolated and clearly marked as prototype defaults.
 
 ## Expo has changed — do not trust your training data
 

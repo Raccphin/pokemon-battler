@@ -1,0 +1,1 @@
+Place one right-facing sprite per Pokémon in this folder, named with its zero-padded Pokédex ID and a `.png` or `.jpg` extension (for example, `0001.png` for Bulbasaur). The app prefers these bundled assets and falls back to PokeAPI artwork when an image is not present.
