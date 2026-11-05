@@ -7,3 +7,11 @@
 - Fall back to the official-artwork sprite URL returned by PokeAPI if the local image is missing or fails to load.
 - Do not assume every Pokémon has four damaging moves or a non-null power; normalize missing move power safely.
 - Show a visible placeholder if neither a local nor remote sprite can be displayed.
+
+## Asset overhaul
+
+- Replace placeholder or otherwise unsuitable in-game art with actual Pokémon and game artwork.
+- Convert animation sheets used for individual Pokémon or game images into singular-frame assets suitable for the relevant UI.
+- Keep static asset selection and rendering separate from animation behavior. Do not assume new asset paths or that assets exist until they are added.
+- Use local Pokémon sprites from `assets/images/sprites/` when available and retain the PokeAPI artwork fallback for missing Pokémon art.
+- Confirm asset provenance and usage rights before including externally sourced artwork.

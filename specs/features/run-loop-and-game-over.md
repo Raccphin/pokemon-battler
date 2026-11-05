@@ -1,0 +1,9 @@
+# Feature: Run loop and game over
+
+- A run advances through areas and their encounters, including the stronger boss encounter at the end of each area.
+- Increase the levels of both the player's Pokémon and opponents as the player progresses through areas.
+- When all Pokémon on the player's team are unable to battle, end the run and show a game-over screen.
+- The game-over screen reports how far the player progressed and shows the team used in that run.
+- Provide an action to start a new run from the beginning.
+- Persist enough run and team state to restore an in-progress run after an app restart, while keeping a completed run's game-over summary available until a new run begins.
+- Keep level scaling, run reset, and defeat conditions in shared game logic and persistence services rather than route components.
