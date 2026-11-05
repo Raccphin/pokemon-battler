@@ -1,6 +1,13 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
+import {
+  AREA_PROGRESSION_CONFIG,
+  chooseRandom,
+  getAreaById,
+  getNextEncounterProgress,
+  getRandomArea,
+} from '@/services/area-progression';
 import {
   calculateCatchResult,
   getBallDetails,
@@ -11,7 +18,11 @@ import {
   getPlayerMaxHp,
 } from '@/services/battle-rules';
 import { rumble } from '@/services/haptics';
-import { fetchPokemon } from '@/services/pokeapi';
+import {
+  fetchPokemon,
+  fetchPokemonClassification,
+  fetchPokemonIdsForTypes,
+} from '@/services/pokeapi';
 import { usePlayer } from '@/providers/player-provider';
 import type { BallType, PokemonMove } from '@/types/game';
 
@@ -30,6 +41,7 @@ function capitalize(value: string): string {
 }
 
 export function useBattleController() {
+  const queryClient = useQueryClient();
   const {
     state,
     operationError,
@@ -38,7 +50,9 @@ export function useBattleController() {
     updateOpponentCells,
     damageActivePokemon,
     resolveCatch,
-    resetEncounter,
+    advanceEncounter,
+    debugAdvanceToBoss,
+    debugHealParty,
   } = usePlayer();
   const profile = state.status === 'ready' ? state.profile : null;
   const activeMember = profile?.party.find((member) => member.slot === profile.activeSlot);
@@ -61,6 +75,7 @@ export function useBattleController() {
     },
     enabled: bossId !== undefined,
   });
+  const area = profile ? getAreaById(profile.areaId) : null;
   const [selectedMoveIndex, setSelectedMoveIndex] = useState<number | null>(null);
   const [round, setRound] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -68,7 +83,9 @@ export function useBattleController() {
   const [catchAnimation, setCatchAnimation] = useState<{ positions: number[] } | null>(null);
   const playerPokemon = playerQuery.data;
   const bossPokemon = bossQuery.data;
-  const dimensions = bossPokemon ? getBossGridDimensions(bossPokemon) : null;
+  const dimensions = bossPokemon
+    ? getBossGridDimensions(bossPokemon, profile?.opponentIsAreaBoss)
+    : null;
   const totalCells = dimensions ? dimensions.rows * dimensions.columns : 0;
   const savedCells = profile?.opponentCells ?? [];
 
@@ -128,7 +145,7 @@ export function useBattleController() {
       if (defeated) {
         setMessage(`${capitalize(bossPokemon.name)} fainted! The raid is complete.`);
       } else {
-        const counterattack = getBossAttack(bossPokemon, round);
+        const counterattack = getBossAttack(bossPokemon, round, profile.opponentIsAreaBoss);
         await damageActivePokemon(counterattack.damage);
         rumble();
         setRound((turn) => turn + 1);
@@ -213,13 +230,123 @@ export function useBattleController() {
   }
 
   async function startNewEncounter() {
+    if (!profile || !area || !profile.encounterComplete) return;
     try {
       setBusy(true);
-      await resetEncounter();
-      setMessage('A new raid encounter is ready.');
+      const areaChanges =
+        profile.encounterIndex + 1 >= AREA_PROGRESSION_CONFIG.encountersPerArea;
+      const nextArea = areaChanges ? getRandomArea() : area;
+      const next = getNextEncounterProgress(profile, nextArea.id);
+      const { opponentId, specialBossId } = next.isAreaBoss
+        ? await chooseAreaBoss(nextArea.id, profile.usedSpecialBossIds)
+        : {
+            opponentId: chooseRandom(
+              (await loadAreaPool(nextArea.id)).filter(
+                (id) => !profile.usedSpecialBossIds.includes(id)
+              )
+            ),
+            specialBossId: undefined,
+          };
+      if (opponentId === undefined) {
+        throw new Error(`No eligible Pokémon were found for the ${nextArea.name}.`);
+      }
+      await advanceEncounter(opponentId, next.isAreaBoss, nextArea.id, specialBossId);
+      setMessage(
+        `${nextArea.name} · Encounter ${next.encounterIndex + 1} of ${AREA_PROGRESSION_CONFIG.encountersPerArea}.`
+      );
       setRound(0);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'The encounter could not be reset.');
+      setMessage(error instanceof Error ? error.message : 'The next encounter could not be loaded.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadAreaPool(areaId: string): Promise<number[]> {
+    const encounterArea = getAreaById(areaId);
+    return queryClient.fetchQuery({
+      queryKey: ['area-encounter-pool', encounterArea.id],
+      queryFn: () => fetchPokemonIdsForTypes(encounterArea.favoredTypes),
+    });
+  }
+
+  async function chooseAreaBoss(
+    areaId: string,
+    usedSpecialBossIds: number[]
+  ): Promise<{ opponentId: number | undefined; specialBossId: number | undefined }> {
+    const bossArea = getAreaById(areaId);
+    if (Math.random() < AREA_PROGRESSION_CONFIG.specialBossChance) {
+      const classifications = await Promise.all(
+        bossArea.specialBossCandidateIds.map((id) =>
+          queryClient.fetchQuery({
+            queryKey: ['pokemon-classification', id],
+            queryFn: () => fetchPokemonClassification(id),
+          })
+        )
+      );
+      const candidates = classifications.filter(
+        (pokemon) =>
+          (pokemon.isLegendary || pokemon.isMythical) &&
+          !usedSpecialBossIds.includes(pokemon.id) &&
+          pokemon.types.some((type) => bossArea.favoredTypes.includes(type))
+      );
+      const specialBossId = chooseRandom(candidates)?.id;
+      if (specialBossId !== undefined) {
+        return { opponentId: specialBossId, specialBossId };
+      }
+    }
+
+    const regularBossId = chooseRandom(
+      (await loadAreaPool(bossArea.id)).filter((id) => !usedSpecialBossIds.includes(id))
+    );
+    return { opponentId: regularBossId, specialBossId: undefined };
+  }
+
+  async function debugDefeatCurrent() {
+    if (!profile || !totalCells || busy || profile.encounterComplete) return;
+    try {
+      setBusy(true);
+      clearOperationError();
+      await updateOpponentCells(Array.from({ length: totalCells }, () => false), true);
+      setMessage(`${capitalize(bossPokemon?.name ?? 'Opponent')} was defeated (debug).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The opponent could not be defeated.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function debugGoToAreaBoss() {
+    if (!profile || !area || busy || profile.opponentIsAreaBoss) return;
+    try {
+      setBusy(true);
+      clearOperationError();
+      const { opponentId, specialBossId } = await chooseAreaBoss(
+        area.id,
+        profile.usedSpecialBossIds
+      );
+      if (opponentId === undefined) {
+        throw new Error(`No eligible boss Pokémon were found for the ${area.name}.`);
+      }
+      await debugAdvanceToBoss(opponentId, specialBossId);
+      setRound(0);
+      setMessage(`Skipped to the ${area.name} area boss (debug).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not load the area boss.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function debugHealEntireParty() {
+    if (busy) return;
+    try {
+      setBusy(true);
+      clearOperationError();
+      await debugHealParty();
+      setMessage('The entire party was revived and fully healed (debug).');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The party could not be healed.');
     } finally {
       setBusy(false);
     }
@@ -247,6 +374,7 @@ export function useBattleController() {
     playerPokemon,
     bossPokemon,
     dimensions,
+    area,
     totalCells,
     cells,
     bossRemaining,
@@ -271,6 +399,9 @@ export function useBattleController() {
     attackMove: performMove,
     handleCatch,
     startNewEncounter,
+    debugDefeatCurrent,
+    debugGoToAreaBoss,
+    debugHealEntireParty,
     handleGridCell,
   };
 }

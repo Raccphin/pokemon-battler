@@ -1,4 +1,5 @@
 import type { Pokemon, PokemonMove } from '@/types/game';
+import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
 
 export interface GridDimensions {
   rows: number;
@@ -12,10 +13,13 @@ export interface CatchResult {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-export function getBossGridDimensions(pokemon: Pokemon): GridDimensions {
+export function getBossGridDimensions(pokemon: Pokemon, isAreaBoss = false): GridDimensions {
   const columns = 6;
   const rows = clamp(Math.ceil((pokemon.stats.hp + pokemon.stats.defense) / 45), 3, 6);
-  return { rows, columns };
+  return {
+    rows: rows + (isAreaBoss ? AREA_PROGRESSION_CONFIG.bossExtraRows : 0),
+    columns: columns + (isAreaBoss ? AREA_PROGRESSION_CONFIG.bossExtraColumns : 0),
+  };
 }
 
 export function getPatternCells(
@@ -39,10 +43,14 @@ export function getPatternCells(
 
 export function getBossAttack(
   pokemon: Pokemon,
-  turn: number
+  turn: number,
+  isAreaBoss = false
 ): { move: PokemonMove; damage: number } {
   const move = pokemon.moves[turn % pokemon.moves.length];
-  const damage = clamp(Math.ceil(pokemon.stats.attack / 15) + Math.ceil(move.power / 45), 4, 30);
+  const attack = isAreaBoss
+    ? pokemon.stats.attack * AREA_PROGRESSION_CONFIG.bossAttackMultiplier
+    : pokemon.stats.attack;
+  const damage = clamp(Math.ceil(attack / 15) + Math.ceil(move.power / 45), 4, 30);
   return { move, damage };
 }
 

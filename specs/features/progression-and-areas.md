@@ -1,9 +1,34 @@
 # Feature: Progression and areas
 
-- Show a progress bar at the top of the screen that communicates the player's current progress through the active area.
-- Each area has a defined set of Pokémon types that appear more often. For example, a forest can favor Grass, Fairy, and Bug types.
-- End each area with a stronger boss encounter.
-- As the player advances through areas, increase the levels of the player's Pokémon and opponents.
-- Persist area identity, progress within the area, encounter progress, and relevant run state in SQLite so progress survives app restarts.
-- Keep encounter generation and progression rules in shared game logic, not in route components.
-- The encounter count or pacing for each area, level scaling, and exact area contents are balance decisions; do not invent fixed formulas without direction.
+- Choose an area at random for a run and choose a new area at random after each area boss. Areas may repeat; progression has no fixed final area.
+- Show the current area, area number, encounter number, and a progress bar at the top of the battle screen.
+- Show the matching area illustration behind the Pokémon in the battle arena, blurred and cover-fitted so it fills the available arena width and height.
+- Each area has a PokeAPI type pool. Regular encounters are selected from Pokémon matching at least one of the area's favored types:
+  - Forest: Grass, Bug, Fairy
+  - Jungle: Grass, Bug, Poison
+  - Cave: Rock, Ground, Dark
+  - Volcano: Fire, Rock, Ground
+  - Mountain: Rock, Flying, Ice
+  - Desert: Ground, Rock, Fire
+  - Beach: Water, Ground, Flying
+  - Ocean / Seafloor: Water, Ice
+  - River: Water, Grass
+  - Swamp / Bog: Water, Poison, Grass
+  - Snowfield: Ice, Water
+  - Ruins: Psychic, Ghost, Rock
+  - Graveyard: Ghost, Dark
+  - City: Normal, Electric, Steel
+  - Power Plant: Electric, Steel
+  - Laboratory: Psychic, Poison, Steel
+  - Fairy Grove: Fairy, Grass, Psychic
+  - Dragon Cave: Dragon, Rock, Ground
+  - Space / Outer Space: Psychic, Steel, Electric
+  - Ancient Ruins: Ghost, Psychic, Steel
+  - Dojo: Fighting, Psychic, Steel
+- Each area has 10 encounter stages. The tenth is the area boss; the two future shop positions temporarily spawn regular Pokémon encounters.
+- Start at level 1 and increase the level by 5 when entering each new area. Apply the current area level to the player's party and opponents.
+- Area bosses use the same encounter and battle rules as other Pokémon, with a 25% chance to be a type-matching legendary or mythical. Bosses have 25% increased Attack and one extra row and column in their HP grid.
+- A legendary or mythical selected as an area boss is recorded immediately and cannot appear again later in the run, whether or not it is caught.
+- Persist area identity, area number, encounter stage, opponent level and boss status, grid progress, and used special-boss IDs in SQLite.
+- Keep area selection, encounter generation, progression, and boss tuning in shared game logic, not route components. Keep the tunable values isolated in the progression configuration.
+- Provide battle-screen debug controls to defeat the current opponent, jump to the current area's boss, and revive and fully heal the entire party.

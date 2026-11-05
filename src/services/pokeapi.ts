@@ -18,6 +18,12 @@ interface PokemonApiResponse {
 
 interface SpeciesApiResponse {
   capture_rate: number;
+  is_legendary: boolean;
+  is_mythical: boolean;
+}
+
+interface TypeApiResponse {
+  pokemon: { pokemon: { url: string } }[];
 }
 
 interface MoveApiResponse {
@@ -69,6 +75,8 @@ export async function fetchPokemon(id: number): Promise<Pokemon> {
     id: response.id,
     name: response.name,
     types: response.types.map(({ type }) => type.name),
+    isLegendary: species.is_legendary,
+    isMythical: species.is_mythical,
     stats: {
       hp: getStat(response.stats, 'hp'),
       attack: getStat(response.stats, 'attack'),
@@ -77,5 +85,33 @@ export async function fetchPokemon(id: number): Promise<Pokemon> {
     captureRate: species.capture_rate,
     spriteUrl: response.sprites.other?.['official-artwork']?.front_default ?? null,
     moves,
+  };
+}
+
+export async function fetchPokemonIdsForTypes(types: string[]): Promise<number[]> {
+  const typeResponses = await Promise.all(
+    types.map((type) => fetchJson<TypeApiResponse>(`${API_BASE_URL}/type/${type}`))
+  );
+  const ids = new Set<number>();
+  for (const response of typeResponses) {
+    for (const entry of response.pokemon) {
+      const match = entry.pokemon.url.match(/\/pokemon\/(\d+)\/?$/);
+      const id = match ? Number(match[1]) : 0;
+      if (id > 0 && id < 10000) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+export async function fetchPokemonClassification(
+  id: number
+): Promise<Pick<Pokemon, 'id' | 'types' | 'isLegendary' | 'isMythical'>> {
+  const response = await fetchJson<PokemonApiResponse>(`${API_BASE_URL}/pokemon/${id}`);
+  const species = await fetchJson<SpeciesApiResponse>(response.species.url);
+  return {
+    id: response.id,
+    types: response.types.map(({ type }) => type.name),
+    isLegendary: species.is_legendary,
+    isMythical: species.is_mythical,
   };
 }

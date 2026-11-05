@@ -1,16 +1,22 @@
 import * as SQLite from 'expo-sqlite';
 
+import { getRandomArea } from '@/services/area-progression';
 import type { HealingItem, Inventory, PartyMember, PlayerProfile } from '@/types/game';
 
 const DATABASE_NAME = 'pokemon-raid-battler.db';
 const STARTER_POKEMON_ID = 1;
-const DEFAULT_BOSS_ID = 143;
 
 interface SaveRow {
   active_slot: number;
   opponent_id: number;
+  opponent_level: number;
+  opponent_is_area_boss: number;
   opponent_cells: string;
   encounter_complete: number;
+  area_id: string;
+  area_number: number;
+  encounter_index: number;
+  used_special_boss_ids: string;
   poke_balls: number;
   great_balls: number;
   ultra_balls: number;
@@ -34,12 +40,26 @@ function parseCells(value: string): boolean[] {
   return parsed;
 }
 
+function parseIds(value: string): number[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed) || !parsed.every((id) => Number.isInteger(id) && id > 0)) {
+    throw new Error('The saved special-boss history is invalid. The save could not be loaded.');
+  }
+  return parsed;
+}
+
 function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
   return {
     activeSlot: save.active_slot,
     opponentId: save.opponent_id,
+    opponentLevel: save.opponent_level,
+    opponentIsAreaBoss: Boolean(save.opponent_is_area_boss),
     opponentCells: parseCells(save.opponent_cells),
     encounterComplete: Boolean(save.encounter_complete),
+    areaId: save.area_id,
+    areaNumber: save.area_number,
+    encounterIndex: save.encounter_index,
+    usedSpecialBossIds: parseIds(save.used_special_boss_ids),
     inventory: {
       pokeBall: save.poke_balls,
       greatBall: save.great_balls,
@@ -67,8 +87,14 @@ export async function openPlayerDatabase(): Promise<{
       id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
       active_slot INTEGER NOT NULL,
       opponent_id INTEGER NOT NULL,
+      opponent_level INTEGER NOT NULL DEFAULT 1,
+      opponent_is_area_boss INTEGER NOT NULL DEFAULT 0,
       opponent_cells TEXT NOT NULL,
       encounter_complete INTEGER NOT NULL,
+      area_id TEXT NOT NULL DEFAULT 'forest',
+      area_number INTEGER NOT NULL DEFAULT 1,
+      encounter_index INTEGER NOT NULL DEFAULT 0,
+      used_special_boss_ids TEXT NOT NULL DEFAULT '[]',
       poke_balls INTEGER NOT NULL,
       great_balls INTEGER NOT NULL,
       ultra_balls INTEGER NOT NULL,
@@ -83,16 +109,36 @@ export async function openPlayerDatabase(): Promise<{
       level INTEGER NOT NULL
     );
   `);
+  const columns = await database.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(player_save)'
+  );
+  const columnNames = new Set(columns.map((column) => column.name));
+  const migrations: [string, string][] = [
+    ['opponent_level', 'INTEGER NOT NULL DEFAULT 1'],
+    ['opponent_is_area_boss', 'INTEGER NOT NULL DEFAULT 0'],
+    ['area_id', "TEXT NOT NULL DEFAULT 'forest'"],
+    ['area_number', 'INTEGER NOT NULL DEFAULT 1'],
+    ['encounter_index', 'INTEGER NOT NULL DEFAULT 0'],
+    ['used_special_boss_ids', "TEXT NOT NULL DEFAULT '[]'"],
+  ];
+  for (const [name, definition] of migrations) {
+    if (!columnNames.has(name)) {
+      await database.execAsync(`ALTER TABLE player_save ADD COLUMN ${name} ${definition}`);
+    }
+  }
+  const initialArea = getRandomArea();
   await database.runAsync(
     `INSERT OR IGNORE INTO player_save
-      (id, active_slot, opponent_id, opponent_cells, encounter_complete, poke_balls,
-       great_balls, ultra_balls, potions, revives)
-      VALUES (1, 0, ?, '[]', 0, 5, 2, 1, 3, 1)`,
-    DEFAULT_BOSS_ID
+      (id, active_slot, opponent_id, opponent_level, opponent_is_area_boss, opponent_cells,
+       encounter_complete, area_id, area_number, encounter_index, used_special_boss_ids,
+       poke_balls, great_balls, ultra_balls, potions, revives)
+      VALUES (1, 0, ?, 1, 0, '[]', 0, ?, 1, 0, '[]', 5, 2, 1, 3, 1)`,
+    initialArea.startingPokemonId,
+    initialArea.id
   );
   await database.runAsync(
     `INSERT OR IGNORE INTO party_member (slot, pokemon_id, current_hp, max_hp, level)
-     VALUES (0, ?, 100, 100, 5)`,
+     VALUES (0, ?, 100, 100, 1)`,
     STARTER_POKEMON_ID
   );
 
@@ -112,13 +158,20 @@ export async function persistPlayerProfile(
 ): Promise<void> {
   await database.withTransactionAsync(async () => {
     await database.runAsync(
-      `UPDATE player_save SET active_slot = ?, opponent_id = ?, opponent_cells = ?,
-       encounter_complete = ?, poke_balls = ?, great_balls = ?, ultra_balls = ?,
-       potions = ?, revives = ? WHERE id = 1`,
+      `UPDATE player_save SET active_slot = ?, opponent_id = ?, opponent_level = ?,
+       opponent_is_area_boss = ?, opponent_cells = ?, encounter_complete = ?, area_id = ?,
+       area_number = ?, encounter_index = ?, used_special_boss_ids = ?, poke_balls = ?,
+       great_balls = ?, ultra_balls = ?, potions = ?, revives = ? WHERE id = 1`,
       profile.activeSlot,
       profile.opponentId,
+      profile.opponentLevel,
+      Number(profile.opponentIsAreaBoss),
       JSON.stringify(profile.opponentCells),
       Number(profile.encounterComplete),
+      profile.areaId,
+      profile.areaNumber,
+      profile.encounterIndex,
+      JSON.stringify(profile.usedSpecialBossIds),
       profile.inventory.pokeBall,
       profile.inventory.greatBall,
       profile.inventory.ultraBall,

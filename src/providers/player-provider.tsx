@@ -7,6 +7,7 @@ import {
   openPlayerDatabase,
   persistPlayerProfile,
 } from '@/services/player-database';
+import { getNextEncounterProgress } from '@/services/area-progression';
 import type { BallType, HealingItem, PartyMember, PlayerProfile } from '@/types/game';
 
 type LoadState =
@@ -29,7 +30,14 @@ interface PlayerContextValue {
     pokemonId: number,
     maxHp: number
   ) => Promise<void>;
-  resetEncounter: () => Promise<void>;
+  advanceEncounter: (
+    opponentId: number,
+    isAreaBoss: boolean,
+    nextAreaId: string,
+    specialBossId?: number
+  ) => Promise<void>;
+  debugAdvanceToBoss: (opponentId: number, specialBossId?: number) => Promise<void>;
+  debugHealParty: () => Promise<void>;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -152,7 +160,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
             pokemonId,
             currentHp: maxHp,
             maxHp,
-            level: 5,
+            level: profile.opponentLevel,
           };
           party = [...party, caught];
         }
@@ -166,12 +174,75 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     [updateProfile]
   );
 
-  const resetEncounter = useCallback(
+  const advanceEncounter = useCallback(
+    (opponentId: number, isAreaBoss: boolean, nextAreaId: string, specialBossId?: number) =>
+      updateProfile((profile) => {
+        if (!profile.encounterComplete) {
+          throw new Error('Complete the current encounter before continuing.');
+        }
+        if (specialBossId !== undefined && (!isAreaBoss || specialBossId !== opponentId)) {
+          throw new Error('The selected special boss does not match the next encounter.');
+        }
+        const next = getNextEncounterProgress(profile, nextAreaId);
+        if (next.isAreaBoss !== isAreaBoss) {
+          throw new Error('The next encounter does not match its saved progression stage.');
+        }
+        const usedSpecialBossIds = specialBossId
+          ? [...new Set([...profile.usedSpecialBossIds, specialBossId])]
+          : profile.usedSpecialBossIds;
+        const party =
+          next.areaNumber > profile.areaNumber
+            ? profile.party.map((member) => ({ ...member, level: next.opponentLevel }))
+            : profile.party;
+        return {
+          ...profile,
+          opponentId,
+          opponentLevel: next.opponentLevel,
+          opponentIsAreaBoss: next.isAreaBoss,
+          opponentCells: [],
+          encounterComplete: false,
+          areaId: next.areaId,
+          areaNumber: next.areaNumber,
+          encounterIndex: next.encounterIndex,
+          usedSpecialBossIds,
+          party,
+        };
+      }),
+    [updateProfile]
+  );
+
+  const debugAdvanceToBoss = useCallback(
+    (opponentId: number, specialBossId?: number) =>
+      updateProfile((profile) => {
+        if (profile.opponentIsAreaBoss) {
+          throw new Error('You are already at this area’s boss.');
+        }
+        if (specialBossId !== undefined && specialBossId !== opponentId) {
+          throw new Error('The selected special boss does not match the next encounter.');
+        }
+        return {
+          ...profile,
+          opponentId,
+          opponentIsAreaBoss: true,
+          opponentCells: [],
+          encounterComplete: false,
+          encounterIndex: 9,
+          usedSpecialBossIds: specialBossId
+            ? [...new Set([...profile.usedSpecialBossIds, specialBossId])]
+            : profile.usedSpecialBossIds,
+        };
+      }),
+    [updateProfile]
+  );
+
+  const debugHealParty = useCallback(
     () =>
       updateProfile((profile) => ({
         ...profile,
-        opponentCells: [],
-        encounterComplete: false,
+        party: profile.party.map((member) => ({
+          ...member,
+          currentHp: member.maxHp,
+        })),
       })),
     [updateProfile]
   );
@@ -195,7 +266,9 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         switchPokemon,
         applyItem,
         resolveCatch,
-        resetEncounter,
+        advanceEncounter,
+        debugAdvanceToBoss,
+        debugHealParty,
       }}>
       {children}
     </PlayerContext.Provider>

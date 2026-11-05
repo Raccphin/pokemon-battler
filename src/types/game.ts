@@ -11,6 +11,8 @@ export interface Pokemon {
   id: number;
   name: string;
   types: string[];
+  isLegendary: boolean;
+  isMythical: boolean;
   stats: {
     hp: number;
     attack: number;
@@ -40,8 +42,14 @@ export interface Inventory {
 export interface PlayerProfile {
   activeSlot: number;
   opponentId: number;
+  opponentLevel: number;
+  opponentIsAreaBoss: boolean;
   opponentCells: boolean[];
   encounterComplete: boolean;
+  areaId: string;
+  areaNumber: number;
+  encounterIndex: number;
+  usedSpecialBossIds: number[];
   inventory: Inventory;
   party: PartyMember[];
 }

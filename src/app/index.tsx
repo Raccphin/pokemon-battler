@@ -3,10 +3,12 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MoveCard } from '@/components/battle/move-card';
+import { AreaBackground } from '@/components/battle/area-background';
 import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ScreenState } from '@/components/screen-state';
 import { ThemedText } from '@/components/themed-text';
 import { useBattleController } from '@/hooks/use-battle-controller';
+import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
 import { getMoveLabel } from '@/services/battle-rules';
 import type { PokemonMove } from '@/types/game';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -114,6 +116,16 @@ export default function BattleScreen() {
   }
   const playerPokemon = playerPokemonCandidate;
   const bossPokemon = bossPokemonCandidate;
+  const area = battle.area;
+  if (!area) {
+    return (
+      <ScreenState
+        title="Area unavailable"
+        message="The saved area could not be found. Try refreshing your save."
+        onRetry={battle.retry}
+      />
+    );
+  }
   const dimensionsCandidate = battle.dimensions;
   if (!dimensionsCandidate) {
     return (
@@ -127,6 +139,9 @@ export default function BattleScreen() {
   const dimensions = dimensionsCandidate;
 
   const hpPercent = Math.max(0, Math.min(100, (activeMember.currentHp / activeMember.maxHp) * 100));
+  const completedEncounters = profile.encounterIndex + Number(profile.encounterComplete);
+  const areaProgress =
+    (completedEncounters / AREA_PROGRESSION_CONFIG.encountersPerArea) * 100;
 
   function dropMove(move: PokemonMove, x: number, y: number) {
     if (!battle.canBattle) return;
@@ -162,7 +177,33 @@ export default function BattleScreen() {
           </View>
         </View>
 
+        <View style={styles.progressCard}>
+          <View style={styles.progressLabelRow}>
+            <ThemedText style={styles.progressArea}>
+              {area.name.toUpperCase()} · AREA {profile.areaNumber}
+            </ThemedText>
+            <ThemedText style={styles.progressEncounter}>
+              {profile.encounterIndex + 1}/{AREA_PROGRESSION_CONFIG.encountersPerArea}
+            </ThemedText>
+          </View>
+          <View
+            accessibilityRole="progressbar"
+            accessibilityLabel={`${area.name} area progress`}
+            accessibilityValue={{
+              min: 0,
+              max: AREA_PROGRESSION_CONFIG.encountersPerArea,
+              now: completedEncounters,
+            }}
+            style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${areaProgress}%` }]} />
+          </View>
+          <ThemedText style={styles.progressHint}>
+            {area.favoredTypes.map(capitalize).join(' · ')} · Level {profile.opponentLevel}
+          </ThemedText>
+        </View>
+
         <View style={styles.arena}>
+          <AreaBackground areaId={area.id} />
           <View style={styles.fighter}>
             <View style={styles.playerSprite}>
               <PokemonSprite pokemon={playerPokemon} />
@@ -171,6 +212,7 @@ export default function BattleScreen() {
               {capitalize(playerPokemon.name)}
             </ThemedText>
             <ThemedText style={styles.fighterType}>{playerPokemon.types.join(' · ')}</ThemedText>
+            <ThemedText style={styles.levelText}>LV. {activeMember.level}</ThemedText>
           </View>
           <Text style={styles.versus}>VS</Text>
           <View style={styles.fighter}>
@@ -180,7 +222,10 @@ export default function BattleScreen() {
             <ThemedText numberOfLines={1} style={styles.fighterName}>
               {capitalize(bossPokemon.name)}
             </ThemedText>
-            <ThemedText style={styles.fighterType}>RAID BOSS</ThemedText>
+            <ThemedText style={styles.fighterType}>
+              {profile.opponentIsAreaBoss ? 'AREA BOSS' : 'OPPONENT'}
+            </ThemedText>
+            <ThemedText style={styles.levelText}>LV. {profile.opponentLevel}</ThemedText>
           </View>
         </View>
 
@@ -199,7 +244,9 @@ export default function BattleScreen() {
         <View style={styles.bossCard}>
           <View style={styles.cardHeader}>
             <View>
-              <ThemedText style={styles.sectionTitle}>BOSS VITALS</ThemedText>
+              <ThemedText style={styles.sectionTitle}>
+                {profile.opponentIsAreaBoss ? 'AREA BOSS VITALS' : 'OPPONENT VITALS'}
+              </ThemedText>
               <ThemedText style={styles.hint}>
                 {battle.bossRemaining} of {battle.totalCells} blocks remain
               </ThemedText>
@@ -261,9 +308,56 @@ export default function BattleScreen() {
             disabled={battle.busy}
             onPress={() => void battle.startNewEncounter()}
             style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
-            <Text style={styles.primaryButtonText}>RAID AGAIN</Text>
+            <Text style={styles.primaryButtonText}>CONTINUE RUN</Text>
           </Pressable>
         ) : null}
+
+        <View style={styles.debugCard}>
+          <View style={styles.debugHeader}>
+            <ThemedText style={styles.sectionTitle}>DEBUG TOOLS</ThemedText>
+            <ThemedText style={styles.hint}>Prototype shortcuts</ThemedText>
+          </View>
+          <View style={styles.debugActions}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={battle.busy || profile.encounterComplete || !battle.remoteReady}
+              onPress={() => void battle.debugDefeatCurrent()}
+              style={({ pressed }) => [
+                styles.debugButton,
+                (battle.busy || profile.encounterComplete || !battle.remoteReady) &&
+                  styles.debugButtonDisabled,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.debugButtonText}>Defeat Pokémon</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={battle.busy || profile.opponentIsAreaBoss}
+              onPress={() => void battle.debugGoToAreaBoss()}
+              style={({ pressed }) => [
+                styles.debugButton,
+                (battle.busy || profile.opponentIsAreaBoss) && styles.debugButtonDisabled,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.debugButtonText}>Go to Area Boss</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={battle.busy || profile.party.every(
+                (member) => member.currentHp === member.maxHp
+              )}
+              onPress={() => void battle.debugHealEntireParty()}
+              style={({ pressed }) => [
+                styles.debugButton,
+                (battle.busy ||
+                  profile.party.every((member) => member.currentHp === member.maxHp)) &&
+                  styles.debugButtonDisabled,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.debugButtonText}>Revive + Heal Party</Text>
+            </Pressable>
+          </View>
+        </View>
 
         <View style={styles.moveHeader}>
           <View>
@@ -340,10 +434,50 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1,
   },
+  progressCard: {
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    gap: 7,
+  },
+  progressLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  progressArea: {
+    color: '#39424a',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  progressEncounter: {
+    color: '#a44f35',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  progressTrack: {
+    height: 8,
+    overflow: 'hidden',
+    borderRadius: 6,
+    backgroundColor: '#e9e9e3',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 6,
+    backgroundColor: '#57a76f',
+  },
+  progressHint: {
+    color: '#77736b',
+    fontSize: 10,
+    fontWeight: '700',
+  },
   arena: {
+    position: 'relative',
     minHeight: 136,
     padding: 10,
     borderRadius: 20,
+    overflow: 'hidden',
     backgroundColor: '#e8e1d2',
     flexDirection: 'row',
     alignItems: 'center',
@@ -358,7 +492,7 @@ const styles = StyleSheet.create({
     width: 96,
     height: 88,
     borderRadius: 20,
-    backgroundColor: '#d8e6d5',
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -366,7 +500,7 @@ const styles = StyleSheet.create({
     width: 96,
     height: 88,
     borderRadius: 20,
-    backgroundColor: '#f0d7c9',
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -382,6 +516,11 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     textTransform: 'uppercase',
+  },
+  levelText: {
+    color: '#8a513d',
+    fontSize: 10,
+    fontWeight: '900',
   },
   versus: {
     color: '#b85a42',
@@ -553,6 +692,45 @@ const styles = StyleSheet.create({
     color: '#9e4439',
     fontSize: 12,
     fontWeight: '700',
+    textAlign: 'center',
+  },
+  debugCard: {
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e5c7a6',
+    backgroundColor: '#fff8ed',
+    gap: 10,
+  },
+  debugHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  debugActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  debugButton: {
+    flexGrow: 1,
+    flexBasis: '30%',
+    minWidth: 96,
+    minHeight: 44,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderRadius: 11,
+    backgroundColor: '#8a513d',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  debugButtonDisabled: {
+    opacity: 0.45,
+  },
+  debugButtonText: {
+    color: '#fffaf0',
+    fontSize: 11,
+    fontWeight: '900',
     textAlign: 'center',
   },
 });
