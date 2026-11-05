@@ -21,7 +21,12 @@ interface PlayerContextValue {
   operationError: string | null;
   clearOperationError: () => void;
   retry: () => void;
-  updateOpponentCells: (cells: boolean[], complete?: boolean) => Promise<void>;
+  updateOpponentGrid: (
+    cells: boolean[],
+    statuses: PlayerProfile['opponentStatuses'],
+    statusFresh: PlayerProfile['opponentStatusFresh'],
+    complete?: boolean
+  ) => Promise<void>;
   damageActivePokemon: (damage: number) => Promise<void>;
   switchPokemon: (slot: number) => Promise<void>;
   applyItem: (item: HealingItem, slot: number) => Promise<void>;
@@ -92,13 +97,23 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     return operation;
   }, []);
 
-  const updateOpponentCells = useCallback(
-    (cells: boolean[], complete = false) =>
+  const updateOpponentGrid = useCallback(
+    (
+      cells: boolean[],
+      statuses: PlayerProfile['opponentStatuses'],
+      statusFresh: PlayerProfile['opponentStatusFresh'],
+      complete = false
+    ) =>
       updateProfile((profile) => {
+        if (cells.length !== statuses.length || cells.length !== statusFresh.length) {
+          throw new Error('The boss grid and its status effects do not match.');
+        }
         const rewardedProfile = complete && !profile.encounterComplete ? awardEncounterReward(profile) : profile;
         return {
           ...rewardedProfile,
           opponentCells: cells,
+          opponentStatuses: statuses,
+          opponentStatusFresh: statusFresh,
           encounterComplete: complete,
         };
       }),
@@ -225,6 +240,8 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
           opponentLevel: next.opponentLevel,
           opponentIsAreaBoss: next.isAreaBoss,
           opponentCells: [],
+          opponentStatuses: [],
+          opponentStatusFresh: [],
           encounterComplete: false,
           areaId: next.areaId,
           areaNumber: next.areaNumber,
@@ -251,6 +268,8 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
           opponentId,
           opponentIsAreaBoss: true,
           opponentCells: [],
+          opponentStatuses: [],
+          opponentStatusFresh: [],
           encounterComplete: false,
           encounterIndex: 9,
           usedSpecialBossIds: specialBossId
@@ -287,7 +306,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         operationError,
         clearOperationError,
         retry,
-        updateOpponentCells,
+        updateOpponentGrid,
         damageActivePokemon,
         switchPokemon,
         applyItem,

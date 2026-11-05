@@ -1,10 +1,14 @@
 export type MovePatternSize = 1 | 2 | 3;
+export type StatusEffect = 'burn' | 'poison' | 'freeze' | 'paralysis' | 'sleep';
 
 export interface PokemonMove {
   name: string;
   type: string;
   power: number;
   patternSize: MovePatternSize;
+  accuracy: number | null;
+  statusEffect: StatusEffect | null;
+  statusChance: number;
 }
 
 export interface Pokemon {
@@ -47,6 +51,8 @@ export interface PlayerProfile {
   opponentLevel: number;
   opponentIsAreaBoss: boolean;
   opponentCells: boolean[];
+  opponentStatuses: (StatusEffect | null)[];
+  opponentStatusFresh: boolean[];
   encounterComplete: boolean;
   areaId: string;
   areaNumber: number;

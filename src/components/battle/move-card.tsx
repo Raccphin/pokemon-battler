@@ -1,8 +1,10 @@
 import { PanResponder, Pressable, StyleSheet, View } from 'react-native';
 import { useMemo } from 'react';
+import { Image } from 'expo-image';
 
 import { ThemedText } from '@/components/themed-text';
-import { getMoveLabel } from '@/services/battle-rules';
+import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
+import { getMoveLabel, getMoveStatusChance } from '@/services/battle-rules';
 import type { PokemonMove } from '@/types/game';
 
 interface MoveCardProps {
@@ -22,6 +24,10 @@ export function MoveCard({
   onDragStart,
   onDrop,
 }: MoveCardProps) {
+  const statusPresentation = move.statusEffect
+    ? STATUS_EFFECT_PRESENTATION[move.statusEffect]
+    : null;
+  const statusChance = getMoveStatusChance(move);
   const panResponder = useMemo(
     () =>
       PanResponder.create({
@@ -42,10 +48,28 @@ export function MoveCard({
       {selected ? (
         <View pointerEvents="none" style={styles.tooltip}>
           <ThemedText style={styles.tooltipTitle}>ATTACK PATTERN</ThemedText>
+          {statusPresentation ? (
+            <ThemedText style={styles.statusPreviewLabel}>
+              {statusPresentation.label.toUpperCase()} · {Math.round(statusChance)}%
+            </ThemedText>
+          ) : null}
           {Array.from({ length: move.patternSize }, (_, row) => (
             <View key={row} style={styles.patternRow}>
               {Array.from({ length: move.patternSize }, (_, column) => (
-                <View key={column} style={styles.patternCell} />
+                <View
+                  key={column}
+                  style={[
+                    styles.patternCell,
+                    statusPresentation && { backgroundColor: statusPresentation.color },
+                  ]}>
+                  {statusPresentation ? (
+                    <Image
+                      contentFit="contain"
+                      source={statusPresentation.icon}
+                      style={styles.patternStatusIcon}
+                    />
+                  ) : null}
+                </View>
               ))}
             </View>
           ))}
@@ -53,7 +77,7 @@ export function MoveCard({
       ) : null}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${getMoveLabel(move.name)}, ${move.patternSize} by ${move.patternSize} pattern`}
+        accessibilityLabel={`${getMoveLabel(move.name)}, ${move.patternSize} by ${move.patternSize} pattern${statusPresentation ? `, may apply ${statusPresentation.label} at ${Math.round(statusChance)} percent` : ''}`}
         disabled={disabled}
         onPress={onSelect}
         style={({ pressed }) => [
@@ -133,16 +157,27 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.6,
   },
+  statusPreviewLabel: {
+    color: '#fffaf0',
+    fontSize: 8,
+    fontWeight: '800',
+  },
   patternRow: {
     flexDirection: 'row',
     gap: 2,
   },
   patternCell: {
-    width: 12,
-    height: 12,
+    width: 16,
+    height: 16,
     borderRadius: 3,
     backgroundColor: '#efb34f',
     borderWidth: 1,
     borderColor: '#ffd787',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  patternStatusIcon: {
+    width: 12,
+    height: 12,
   },
 });

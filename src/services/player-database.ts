@@ -1,7 +1,13 @@
 import * as SQLite from 'expo-sqlite';
 
 import { getRandomArea } from '@/services/area-progression';
-import type { HealingItem, Inventory, PartyMember, PlayerProfile } from '@/types/game';
+import type {
+  HealingItem,
+  Inventory,
+  PartyMember,
+  PlayerProfile,
+  StatusEffect,
+} from '@/types/game';
 
 const DATABASE_NAME = 'pokemon-raid-battler.db';
 const STARTER_POKEMON_ID = 1;
@@ -12,6 +18,8 @@ interface SaveRow {
   opponent_level: number;
   opponent_is_area_boss: number;
   opponent_cells: string;
+  opponent_statuses: string;
+  opponent_status_fresh: string;
   encounter_complete: number;
   area_id: string;
   area_number: number;
@@ -42,6 +50,47 @@ function parseCells(value: string): boolean[] {
   return parsed;
 }
 
+function isStatusEffect(value: unknown): value is StatusEffect {
+  return (
+    value === 'burn' ||
+    value === 'poison' ||
+    value === 'freeze' ||
+    value === 'paralysis' ||
+    value === 'sleep'
+  );
+}
+
+function parseStatuses(value: string, cellCount: number): (StatusEffect | null)[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) {
+    throw new Error('The saved boss-grid status effects are invalid. The save could not be loaded.');
+  }
+  if (parsed.length === 0) {
+    return Array.from({ length: cellCount }, () => null);
+  }
+  if (
+    parsed.length !== cellCount ||
+    !parsed.every((status) => status === null || isStatusEffect(status))
+  ) {
+    throw new Error('The saved boss-grid status effects are invalid. The save could not be loaded.');
+  }
+  return parsed.map((status) => (isStatusEffect(status) ? status : null));
+}
+
+function parseStatusFresh(value: string, cellCount: number): boolean[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) {
+    throw new Error('The saved boss-grid status timing is invalid. The save could not be loaded.');
+  }
+  if (parsed.length === 0) {
+    return Array.from({ length: cellCount }, () => false);
+  }
+  if (parsed.length !== cellCount || !parsed.every((fresh) => typeof fresh === 'boolean')) {
+    throw new Error('The saved boss-grid status timing is invalid. The save could not be loaded.');
+  }
+  return parsed;
+}
+
 function parseIds(value: string): number[] {
   const parsed: unknown = JSON.parse(value);
   if (!Array.isArray(parsed) || !parsed.every((id) => Number.isInteger(id) && id > 0)) {
@@ -51,12 +100,15 @@ function parseIds(value: string): number[] {
 }
 
 function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
+  const opponentCells = parseCells(save.opponent_cells);
   return {
     activeSlot: save.active_slot,
     opponentId: save.opponent_id,
     opponentLevel: save.opponent_level,
     opponentIsAreaBoss: Boolean(save.opponent_is_area_boss),
-    opponentCells: parseCells(save.opponent_cells),
+    opponentCells,
+    opponentStatuses: parseStatuses(save.opponent_statuses, opponentCells.length),
+    opponentStatusFresh: parseStatusFresh(save.opponent_status_fresh, opponentCells.length),
     encounterComplete: Boolean(save.encounter_complete),
     areaId: save.area_id,
     areaNumber: save.area_number,
@@ -94,6 +146,8 @@ export async function openPlayerDatabase(): Promise<{
       opponent_level INTEGER NOT NULL DEFAULT 1,
       opponent_is_area_boss INTEGER NOT NULL DEFAULT 0,
       opponent_cells TEXT NOT NULL,
+      opponent_statuses TEXT NOT NULL DEFAULT '[]',
+      opponent_status_fresh TEXT NOT NULL DEFAULT '[]',
       encounter_complete INTEGER NOT NULL,
       area_id TEXT NOT NULL DEFAULT 'forest',
       area_number INTEGER NOT NULL DEFAULT 1,
@@ -122,6 +176,8 @@ export async function openPlayerDatabase(): Promise<{
   const migrations: [string, string][] = [
     ['opponent_level', 'INTEGER NOT NULL DEFAULT 1'],
     ['opponent_is_area_boss', 'INTEGER NOT NULL DEFAULT 0'],
+    ['opponent_statuses', "TEXT NOT NULL DEFAULT '[]'"],
+    ['opponent_status_fresh', "TEXT NOT NULL DEFAULT '[]'"],
     ['area_id', "TEXT NOT NULL DEFAULT 'forest'"],
     ['area_number', 'INTEGER NOT NULL DEFAULT 1'],
     ['encounter_index', 'INTEGER NOT NULL DEFAULT 0'],
@@ -138,9 +194,10 @@ export async function openPlayerDatabase(): Promise<{
   await database.runAsync(
     `INSERT OR IGNORE INTO player_save
       (id, active_slot, opponent_id, opponent_level, opponent_is_area_boss, opponent_cells,
-       encounter_complete, area_id, area_number, encounter_index, used_special_boss_ids,
-       money, shop_progress, poke_balls, great_balls, ultra_balls, potions, revives)
-      VALUES (1, 0, ?, 1, 0, '[]', 0, ?, 1, 0, '[]', 0, 0, 5, 2, 1, 3, 1)`,
+       opponent_statuses, opponent_status_fresh, encounter_complete, area_id, area_number,
+       encounter_index, used_special_boss_ids, money, shop_progress, poke_balls, great_balls,
+       ultra_balls, potions, revives)
+      VALUES (1, 0, ?, 1, 0, '[]', '[]', '[]', 0, ?, 1, 0, '[]', 0, 0, 5, 2, 1, 3, 1)`,
     initialArea.startingPokemonId,
     initialArea.id
   );
@@ -167,7 +224,8 @@ export async function persistPlayerProfile(
   await database.withTransactionAsync(async () => {
     await database.runAsync(
       `UPDATE player_save SET active_slot = ?, opponent_id = ?, opponent_level = ?,
-       opponent_is_area_boss = ?, opponent_cells = ?, encounter_complete = ?, area_id = ?,
+       opponent_is_area_boss = ?, opponent_cells = ?, opponent_statuses = ?, opponent_status_fresh = ?,
+       encounter_complete = ?, area_id = ?,
        area_number = ?, encounter_index = ?, used_special_boss_ids = ?, money = ?,
        shop_progress = ?, poke_balls = ?, great_balls = ?, ultra_balls = ?, potions = ?,
        revives = ? WHERE id = 1`,
@@ -176,6 +234,8 @@ export async function persistPlayerProfile(
       profile.opponentLevel,
       Number(profile.opponentIsAreaBoss),
       JSON.stringify(profile.opponentCells),
+      JSON.stringify(profile.opponentStatuses),
+      JSON.stringify(profile.opponentStatusFresh),
       Number(profile.encounterComplete),
       profile.areaId,
       profile.areaNumber,
