@@ -6,6 +6,7 @@ import {
   applyHealingItem,
   openPlayerDatabase,
   persistPlayerProfile,
+  resetPlayerSave,
 } from '@/services/player-database';
 import { getNextEncounterProgress } from '@/services/area-progression';
 import { awardEncounterReward, buyShopItem, SHOP_CONFIG } from '@/services/shop';
@@ -24,6 +25,7 @@ interface PlayerContextValue {
   updateOpponentCells: (cells: boolean[], complete?: boolean) => Promise<void>;
   damageActivePokemon: (damage: number) => Promise<void>;
   switchPokemon: (slot: number) => Promise<void>;
+  selectStarter: (pokemonId: number, maxHp: number) => Promise<void>;
   applyItem: (item: HealingItem, slot: number) => Promise<void>;
   purchaseItem: (item: ShopItemKey) => Promise<void>;
   resolveCatch: (
@@ -41,6 +43,7 @@ interface PlayerContextValue {
   ) => Promise<void>;
   debugAdvanceToBoss: (opponentId: number, specialBossId?: number) => Promise<void>;
   debugHealParty: () => Promise<void>;
+  debugWipeSaveData: () => Promise<void>;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -127,6 +130,35 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         if (!member) throw new Error('That Pokémon is not in your party.');
         if (member.currentHp <= 0) throw new Error('A fainted Pokémon cannot be switched in.');
         return { ...profile, activeSlot: slot };
+      }),
+    [updateProfile]
+  );
+
+  const selectStarter = useCallback(
+    (pokemonId: number, maxHp: number) =>
+      updateProfile((profile) => {
+        if (profile.starterSelected || profile.party.length > 0) {
+          throw new Error('A starter has already been selected for this run.');
+        }
+        if (!Number.isInteger(pokemonId) || pokemonId <= 0) {
+          throw new Error('The selected Pokémon is invalid.');
+        }
+        if (!Number.isInteger(maxHp) || maxHp <= 0) {
+          throw new Error('The selected Pokémon has invalid health data.');
+        }
+        const starter: PartyMember = {
+          slot: 0,
+          pokemonId,
+          currentHp: maxHp,
+          maxHp,
+          level: 1,
+        };
+        return {
+          ...profile,
+          starterSelected: true,
+          activeSlot: starter.slot,
+          party: [starter],
+        };
       }),
     [updateProfile]
   );
@@ -273,6 +305,22 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     [updateProfile]
   );
 
+  const debugWipeSaveData = useCallback(() => {
+    const operation = queueRef.current.then(async () => {
+      const database = databaseRef.current;
+      if (!database || !profileRef.current) {
+        throw new Error('The player save is not ready yet.');
+      }
+      const profile = await resetPlayerSave(database);
+      profileRef.current = profile;
+      setState({ status: 'ready', profile });
+      setOperationError(null);
+    });
+    queueRef.current = operation.catch(() => undefined);
+    void operation.catch((error: unknown) => setOperationError(getErrorMessage(error)));
+    return operation;
+  }, []);
+
   const clearOperationError = useCallback(() => setOperationError(null), []);
   const retry = useCallback(() => {
     setOperationError(null);
@@ -290,12 +338,14 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         updateOpponentCells,
         damageActivePokemon,
         switchPokemon,
+        selectStarter,
         applyItem,
         purchaseItem,
         resolveCatch,
         advanceEncounter,
         debugAdvanceToBoss,
         debugHealParty,
+        debugWipeSaveData,
       }}>
       {children}
     </PlayerContext.Provider>

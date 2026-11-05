@@ -26,6 +26,14 @@ interface TypeApiResponse {
   pokemon: { pokemon: { url: string } }[];
 }
 
+interface PokemonTypesApiResponse {
+  id: number;
+  name: string;
+  types: { type: { name: string } }[];
+  stats: PokemonApiResponse['stats'];
+  sprites: PokemonApiResponse['sprites'];
+}
+
 interface MoveApiResponse {
   power: number | null;
   type: { name: string };
@@ -113,5 +121,22 @@ export async function fetchPokemonClassification(
     types: response.types.map(({ type }) => type.name),
     isLegendary: species.is_legendary,
     isMythical: species.is_mythical,
+  };
+}
+
+export async function fetchPokemonStarterData(id: number): Promise<{
+  id: number;
+  name: string;
+  types: string[];
+  hp: number;
+  spriteUrl: string | null;
+}> {
+  const response = await fetchJson<PokemonTypesApiResponse>(`${API_BASE_URL}/pokemon/${id}`);
+  return {
+    id: response.id,
+    name: response.name,
+    types: response.types.map(({ type }) => type.name),
+    hp: getStat(response.stats, 'hp'),
+    spriteUrl: response.sprites.other?.['official-artwork']?.front_default ?? null,
   };
 }

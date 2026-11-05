@@ -42,6 +42,7 @@ export interface Inventory {
 export type ShopItemKey = keyof Inventory;
 
 export interface PlayerProfile {
+  starterSelected: boolean;
   activeSlot: number;
   opponentId: number;
   opponentLevel: number;

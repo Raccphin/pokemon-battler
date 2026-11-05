@@ -6,7 +6,7 @@ import { pokemonSpriteSources } from '@/services/sprite-registry';
 import type { Pokemon } from '@/types/game';
 
 interface PokemonSpriteProps {
-  pokemon: Pokemon;
+  pokemon: Pick<Pokemon, 'id' | 'spriteUrl'>;
   mirrored?: boolean;
 }
 

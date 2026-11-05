@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -20,6 +20,7 @@ function capitalize(value: string): string {
 
 export default function BattleScreen() {
   const gridRef = useRef<React.ElementRef<typeof View>>(null);
+  const [confirmWipeSave, setConfirmWipeSave] = useState(false);
   const battle = useBattleController();
   const pathname = usePathname();
   const { throwBall } = useLocalSearchParams<{ throwBall?: string | string[] }>();
@@ -70,7 +71,7 @@ export default function BattleScreen() {
       shopRedirectProgress.current !== shopProgress
     ) {
       shopRedirectProgress.current = shopProgress;
-      router.replace('/shop');
+      router.replace('../shop');
     }
   }, [
     battle.busy,
@@ -392,7 +393,57 @@ export default function BattleScreen() {
               ]}>
               <Text style={styles.debugButtonText}>Revive + Heal Party</Text>
             </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={battle.busy}
+              onPress={() => setConfirmWipeSave(true)}
+              style={({ pressed }) => [
+                styles.debugButton,
+                styles.debugDangerButton,
+                battle.busy && styles.debugButtonDisabled,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.debugButtonText}>Wipe Save Data</Text>
+            </Pressable>
           </View>
+          {confirmWipeSave ? (
+            <View style={styles.wipeConfirmation}>
+              <ThemedText style={styles.wipeConfirmationText}>
+                This erases your party and run progress. Start over and choose a new starter?
+              </ThemedText>
+              <View style={styles.debugActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={battle.busy}
+                  onPress={() => {
+                    setConfirmWipeSave(false);
+                    void battle.debugWipeSaveData();
+                  }}
+                  style={({ pressed }) => [
+                    styles.debugButton,
+                    styles.debugDangerButton,
+                    battle.busy && styles.debugButtonDisabled,
+                    pressed && styles.pressed,
+                  ]}>
+                  <Text style={styles.debugButtonText}>
+                    {battle.busy ? 'Wiping…' : 'Confirm Wipe'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={battle.busy}
+                  onPress={() => setConfirmWipeSave(false)}
+                  style={({ pressed }) => [
+                    styles.debugButton,
+                    styles.debugCancelButton,
+                    battle.busy && styles.debugButtonDisabled,
+                    pressed && styles.pressed,
+                  ]}>
+                  <Text style={styles.debugButtonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.moveHeader}>
@@ -748,6 +799,17 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
   },
+  wipeConfirmation: {
+    gap: 8,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: '#fbe5df',
+  },
+  wipeConfirmationText: {
+    color: '#713528',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   debugButton: {
     flexGrow: 1,
     flexBasis: '30%',
@@ -762,6 +824,12 @@ const styles = StyleSheet.create({
   },
   debugButtonDisabled: {
     opacity: 0.45,
+  },
+  debugDangerButton: {
+    backgroundColor: '#a43b32',
+  },
+  debugCancelButton: {
+    backgroundColor: '#6f655e',
   },
   debugButtonText: {
     color: '#fffaf0',

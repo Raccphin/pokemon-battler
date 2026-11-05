@@ -53,6 +53,7 @@ export function useBattleController() {
     advanceEncounter,
     debugAdvanceToBoss,
     debugHealParty,
+    debugWipeSaveData: resetSaveData,
   } = usePlayer();
   const profile = state.status === 'ready' ? state.profile : null;
   const activeMember = profile?.party.find((member) => member.slot === profile.activeSlot);
@@ -354,6 +355,20 @@ export function useBattleController() {
     }
   }
 
+  async function debugWipeSaveData() {
+    if (busy) return;
+    try {
+      setBusy(true);
+      clearOperationError();
+      await resetSaveData();
+      setMessage('Save data wiped. Choose a new starter to begin.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Save data could not be wiped.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function retryRemote() {
     void Promise.all([
       playerQuery.refetch(),
@@ -404,6 +419,7 @@ export function useBattleController() {
     debugDefeatCurrent,
     debugGoToAreaBoss,
     debugHealEntireParty,
+    debugWipeSaveData,
     handleGridCell,
   };
 }

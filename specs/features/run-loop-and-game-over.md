@@ -5,5 +5,6 @@
 - When all Pokémon on the player's team are unable to battle, end the run and show a game-over screen.
 - The game-over screen reports how far the player progressed and shows the team used in that run.
 - Provide an action to start a new run from the beginning.
+- Provide a confirmed debug-menu action to wipe saved run and party data, reset progress and inventory, and return to starter selection.
 - Persist enough run and team state to restore an in-progress run after an app restart, while keeping a completed run's game-over summary available until a new run begins.
 - Keep level scaling, run reset, and defeat conditions in shared game logic and persistence services rather than route components.
