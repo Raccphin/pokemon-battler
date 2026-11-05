@@ -229,8 +229,8 @@ export function useBattleController() {
     }
   }
 
-  async function startNewEncounter() {
-    if (!profile || !area || !profile.encounterComplete) return;
+  async function startNewEncounter(fromShop = false): Promise<boolean> {
+    if (!profile || !area || !profile.encounterComplete) return false;
     try {
       setBusy(true);
       const areaChanges =
@@ -250,13 +250,15 @@ export function useBattleController() {
       if (opponentId === undefined) {
         throw new Error(`No eligible Pokémon were found for the ${nextArea.name}.`);
       }
-      await advanceEncounter(opponentId, next.isAreaBoss, nextArea.id, specialBossId);
+      await advanceEncounter(opponentId, next.isAreaBoss, nextArea.id, specialBossId, fromShop);
       setMessage(
         `${nextArea.name} · Encounter ${next.encounterIndex + 1} of ${AREA_PROGRESSION_CONFIG.encountersPerArea}.`
       );
       setRound(0);
+      return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The next encounter could not be loaded.');
+      return false;
     } finally {
       setBusy(false);
     }

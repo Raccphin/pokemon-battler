@@ -1,15 +1,17 @@
-import { DefaultTheme, ThemeProvider } from 'expo-router';
+import { DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 
-import AppTabs from '@/components/app-tabs';
 import { AppQueryProvider } from '@/providers/query-provider';
 import { PlayerProvider } from '@/providers/player-provider';
 
-export default function TabLayout() {
+export default function RootLayout() {
   return (
     <AppQueryProvider>
       <PlayerProvider>
         <ThemeProvider value={DefaultTheme}>
-          <AppTabs />
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="shop" />
+          </Stack>
         </ThemeProvider>
       </PlayerProvider>
     </AppQueryProvider>

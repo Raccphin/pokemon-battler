@@ -17,6 +17,8 @@ interface SaveRow {
   area_number: number;
   encounter_index: number;
   used_special_boss_ids: string;
+  money: number;
+  shop_progress: number;
   poke_balls: number;
   great_balls: number;
   ultra_balls: number;
@@ -60,6 +62,8 @@ function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
     areaNumber: save.area_number,
     encounterIndex: save.encounter_index,
     usedSpecialBossIds: parseIds(save.used_special_boss_ids),
+    money: save.money,
+    shopProgress: save.shop_progress,
     inventory: {
       pokeBall: save.poke_balls,
       greatBall: save.great_balls,
@@ -95,6 +99,8 @@ export async function openPlayerDatabase(): Promise<{
       area_number INTEGER NOT NULL DEFAULT 1,
       encounter_index INTEGER NOT NULL DEFAULT 0,
       used_special_boss_ids TEXT NOT NULL DEFAULT '[]',
+      money INTEGER NOT NULL DEFAULT 0,
+      shop_progress INTEGER NOT NULL DEFAULT 0,
       poke_balls INTEGER NOT NULL,
       great_balls INTEGER NOT NULL,
       ultra_balls INTEGER NOT NULL,
@@ -120,6 +126,8 @@ export async function openPlayerDatabase(): Promise<{
     ['area_number', 'INTEGER NOT NULL DEFAULT 1'],
     ['encounter_index', 'INTEGER NOT NULL DEFAULT 0'],
     ['used_special_boss_ids', "TEXT NOT NULL DEFAULT '[]'"],
+    ['money', 'INTEGER NOT NULL DEFAULT 0'],
+    ['shop_progress', 'INTEGER NOT NULL DEFAULT 0'],
   ];
   for (const [name, definition] of migrations) {
     if (!columnNames.has(name)) {
@@ -131,8 +139,8 @@ export async function openPlayerDatabase(): Promise<{
     `INSERT OR IGNORE INTO player_save
       (id, active_slot, opponent_id, opponent_level, opponent_is_area_boss, opponent_cells,
        encounter_complete, area_id, area_number, encounter_index, used_special_boss_ids,
-       poke_balls, great_balls, ultra_balls, potions, revives)
-      VALUES (1, 0, ?, 1, 0, '[]', 0, ?, 1, 0, '[]', 5, 2, 1, 3, 1)`,
+       money, shop_progress, poke_balls, great_balls, ultra_balls, potions, revives)
+      VALUES (1, 0, ?, 1, 0, '[]', 0, ?, 1, 0, '[]', 0, 0, 5, 2, 1, 3, 1)`,
     initialArea.startingPokemonId,
     initialArea.id
   );
@@ -160,8 +168,9 @@ export async function persistPlayerProfile(
     await database.runAsync(
       `UPDATE player_save SET active_slot = ?, opponent_id = ?, opponent_level = ?,
        opponent_is_area_boss = ?, opponent_cells = ?, encounter_complete = ?, area_id = ?,
-       area_number = ?, encounter_index = ?, used_special_boss_ids = ?, poke_balls = ?,
-       great_balls = ?, ultra_balls = ?, potions = ?, revives = ? WHERE id = 1`,
+       area_number = ?, encounter_index = ?, used_special_boss_ids = ?, money = ?,
+       shop_progress = ?, poke_balls = ?, great_balls = ?, ultra_balls = ?, potions = ?,
+       revives = ? WHERE id = 1`,
       profile.activeSlot,
       profile.opponentId,
       profile.opponentLevel,
@@ -172,6 +181,8 @@ export async function persistPlayerProfile(
       profile.areaNumber,
       profile.encounterIndex,
       JSON.stringify(profile.usedSpecialBossIds),
+      profile.money,
+      profile.shopProgress,
       profile.inventory.pokeBall,
       profile.inventory.greatBall,
       profile.inventory.ultraBall,

@@ -10,8 +10,9 @@ import { ThemedText } from '@/components/themed-text';
 import { useBattleController } from '@/hooks/use-battle-controller';
 import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
 import { getMoveLabel } from '@/services/battle-rules';
+import { SHOP_CONFIG } from '@/services/shop';
 import type { PokemonMove } from '@/types/game';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, usePathname } from 'expo-router';
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
@@ -20,8 +21,10 @@ function capitalize(value: string): string {
 export default function BattleScreen() {
   const gridRef = useRef<React.ElementRef<typeof View>>(null);
   const battle = useBattleController();
+  const pathname = usePathname();
   const { throwBall } = useLocalSearchParams<{ throwBall?: string | string[] }>();
   const handledThrow = useRef<string | null>(null);
+  const shopRedirectProgress = useRef<number | null>(null);
 
   useEffect(() => {
     const ball = Array.isArray(throwBall) ? throwBall[0] : throwBall;
@@ -30,9 +33,11 @@ export default function BattleScreen() {
       return;
     }
     if (ball !== 'pokeBall' && ball !== 'greatBall' && ball !== 'ultraBall') {
-      handledThrow.current = ball;
-      battle.setMessage('That Poké Ball is not available.');
-      router.replace('/');
+      if (handledThrow.current !== ball) {
+        handledThrow.current = ball;
+        battle.setMessage('That Poké Ball is not available.');
+        router.replace('/');
+      }
       return;
     }
     if (!battle.remoteReady || battle.state.status !== 'ready' || handledThrow.current === ball) {
@@ -43,6 +48,37 @@ export default function BattleScreen() {
     void battle.handleCatch(ball);
     router.replace('/');
   }, [battle, throwBall]);
+
+  useEffect(() => {
+    const shopProgress = battle.profile?.shopProgress;
+    const shouldOpenShop =
+      battle.profile?.encounterComplete &&
+      shopProgress !== undefined &&
+      shopProgress >= SHOP_CONFIG.encountersPerShop;
+
+    if (!shouldOpenShop) {
+      shopRedirectProgress.current = null;
+      return;
+    }
+    if (pathname === '/shop') {
+      shopRedirectProgress.current = null;
+      return;
+    }
+    if (
+      !battle.busy &&
+      !battle.catchAnimation &&
+      shopRedirectProgress.current !== shopProgress
+    ) {
+      shopRedirectProgress.current = shopProgress;
+      router.replace('/shop');
+    }
+  }, [
+    battle.busy,
+    battle.catchAnimation,
+    battle.profile?.encounterComplete,
+    battle.profile?.shopProgress,
+    pathname,
+  ]);
 
   if (battle.state.status === 'loading') {
     return (
@@ -305,7 +341,7 @@ export default function BattleScreen() {
         {profile.encounterComplete ? (
           <Pressable
             accessibilityRole="button"
-            disabled={battle.busy}
+            disabled={battle.busy || profile.shopProgress >= SHOP_CONFIG.encountersPerShop}
             onPress={() => void battle.startNewEncounter()}
             style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
             <Text style={styles.primaryButtonText}>CONTINUE RUN</Text>

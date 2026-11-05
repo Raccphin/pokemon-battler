@@ -8,7 +8,8 @@ import {
   persistPlayerProfile,
 } from '@/services/player-database';
 import { getNextEncounterProgress } from '@/services/area-progression';
-import type { BallType, HealingItem, PartyMember, PlayerProfile } from '@/types/game';
+import { awardEncounterReward, buyShopItem, SHOP_CONFIG } from '@/services/shop';
+import type { BallType, HealingItem, PartyMember, PlayerProfile, ShopItemKey } from '@/types/game';
 
 type LoadState =
   | { status: 'loading' }
@@ -24,6 +25,7 @@ interface PlayerContextValue {
   damageActivePokemon: (damage: number) => Promise<void>;
   switchPokemon: (slot: number) => Promise<void>;
   applyItem: (item: HealingItem, slot: number) => Promise<void>;
+  purchaseItem: (item: ShopItemKey) => Promise<void>;
   resolveCatch: (
     ball: BallType,
     success: boolean,
@@ -34,7 +36,8 @@ interface PlayerContextValue {
     opponentId: number,
     isAreaBoss: boolean,
     nextAreaId: string,
-    specialBossId?: number
+    specialBossId?: number,
+    fromShop?: boolean
   ) => Promise<void>;
   debugAdvanceToBoss: (opponentId: number, specialBossId?: number) => Promise<void>;
   debugHealParty: () => Promise<void>;
@@ -91,11 +94,14 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
 
   const updateOpponentCells = useCallback(
     (cells: boolean[], complete = false) =>
-      updateProfile((profile) => ({
-        ...profile,
-        opponentCells: cells,
-        encounterComplete: complete,
-      })),
+      updateProfile((profile) => {
+        const rewardedProfile = complete && !profile.encounterComplete ? awardEncounterReward(profile) : profile;
+        return {
+          ...rewardedProfile,
+          opponentCells: cells,
+          encounterComplete: complete,
+        };
+      }),
     [updateProfile]
   );
 
@@ -142,6 +148,12 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     [updateProfile]
   );
 
+  const purchaseItem = useCallback(
+    (item: ShopItemKey) =>
+      updateProfile((profile) => buyShopItem(profile, item)),
+    [updateProfile]
+  );
+
   const resolveCatch = useCallback(
     (ball: BallType, success: boolean, pokemonId: number, maxHp: number) =>
       updateProfile((profile) => {
@@ -164,10 +176,11 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
           };
           party = [...party, caught];
         }
+        const rewardedProfile = success ? awardEncounterReward({ ...profile, inventory, party, encounterComplete: true }) : { ...profile, inventory, party, encounterComplete: false };
         return {
-          ...profile,
-          inventory,
-          party,
+          ...rewardedProfile,
+          inventory: rewardedProfile.inventory,
+          party: rewardedProfile.party,
           encounterComplete: success,
         };
       }),
@@ -175,10 +188,22 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
   );
 
   const advanceEncounter = useCallback(
-    (opponentId: number, isAreaBoss: boolean, nextAreaId: string, specialBossId?: number) =>
+    (
+      opponentId: number,
+      isAreaBoss: boolean,
+      nextAreaId: string,
+      specialBossId?: number,
+      fromShop = false
+    ) =>
       updateProfile((profile) => {
         if (!profile.encounterComplete) {
           throw new Error('Complete the current encounter before continuing.');
+        }
+        if (profile.shopProgress >= SHOP_CONFIG.encountersPerShop && !fromShop) {
+          throw new Error('Visit the shop before continuing to the next encounter.');
+        }
+        if (fromShop && profile.shopProgress < SHOP_CONFIG.encountersPerShop) {
+          throw new Error('The shop is not ready to close yet.');
         }
         if (specialBossId !== undefined && (!isAreaBoss || specialBossId !== opponentId)) {
           throw new Error('The selected special boss does not match the next encounter.');
@@ -205,6 +230,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
           areaNumber: next.areaNumber,
           encounterIndex: next.encounterIndex,
           usedSpecialBossIds,
+          shopProgress: fromShop ? 0 : profile.shopProgress,
           party,
         };
       }),
@@ -265,6 +291,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         damageActivePokemon,
         switchPokemon,
         applyItem,
+        purchaseItem,
         resolveCatch,
         advanceEncounter,
         debugAdvanceToBoss,

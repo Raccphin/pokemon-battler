@@ -39,6 +39,8 @@ export interface Inventory {
   revive: number;
 }
 
+export type ShopItemKey = keyof Inventory;
+
 export interface PlayerProfile {
   activeSlot: number;
   opponentId: number;
@@ -50,6 +52,8 @@ export interface PlayerProfile {
   areaNumber: number;
   encounterIndex: number;
   usedSpecialBossIds: number[];
+  money: number;
+  shopProgress: number;
   inventory: Inventory;
   party: PartyMember[];
 }
