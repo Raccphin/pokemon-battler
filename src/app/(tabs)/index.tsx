@@ -1,4 +1,3 @@
-import { useQueries, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,13 +10,10 @@ import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ScreenState } from '@/components/screen-state';
 import { ThemedText } from '@/components/themed-text';
 import { useBattleController } from '@/hooks/use-battle-controller';
+import { useBattleScreenController } from '@/hooks/use-battle-screen-controller';
 import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
-import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
-import { getMoveLabel, getPlayerMaxHp } from '@/services/battle-rules';
-import { getMovePattern } from '@/services/move-patterns';
-import { SHOP_CONFIG } from '@/services/shop';
-import { fetchPokemon, fetchPokemonMoves } from '@/services/pokeapi';
 import type { BallType, PokemonMove } from '@/types/game';
+import { getMoveLabel } from '@/utils/labels';
 import { router, useLocalSearchParams, usePathname } from 'expo-router';
 
 function capitalize(value: string): string {
@@ -43,45 +39,38 @@ export default function BattleScreen() {
   const [savingEvolution, setSavingEvolution] = useState(false);
   const [evolutionError, setEvolutionError] = useState<string | null>(null);
   const battle = useBattleController();
-  const partyPokemonQueries = useQueries({
-    queries:
-      battle.profile?.party.map((member) => ({
-        queryKey: ['pokemon', member.pokemonId, member.moves],
-        queryFn: () => fetchPokemon(member.pokemonId, member.moves),
-      })) ?? [],
+  const screen = useBattleScreenController({
+    profile: battle.profile,
+    selectedUnlockSlot,
+    selectedUnlockedMove,
+    previewMoveName,
+    evolvePokemon: battle.evolvePokemon,
   });
-  const selectedUnlockForPreview =
-    battle.profile?.pendingMoveUnlocks.find(
-      (unlock) => unlock.slot === selectedUnlockSlot
-    ) ?? battle.profile?.pendingMoveUnlocks[0];
-  const unlockMemberForPreview = selectedUnlockForPreview
-    ? battle.profile?.party.find(
-        (member) =>
-          member.slot === selectedUnlockForPreview.slot &&
-          member.pokemonId === selectedUnlockForPreview.pokemonId
-      )
-    : undefined;
-  const movePreviewNames = [
-    ...new Set([
-      ...(unlockMemberForPreview?.moves ?? []),
-      ...(selectedUnlockForPreview?.moves ?? []),
-    ]),
-  ].sort();
-  const movePreviewQuery = useQuery({
-    queryKey: ['pokemon-moves', movePreviewNames],
-    queryFn: () => fetchPokemonMoves(movePreviewNames),
-    enabled: movePreviewNames.length > 0,
-  });
-  const pendingEvolution = battle.profile?.pendingEvolutions.find(
-    (evolution) => !evolution.prompted
-  );
-  const evolutionPokemonQueries = useQueries({
-    queries:
-      pendingEvolution?.options.map((option) => ({
-        queryKey: ['pokemon', option.pokemonId, []],
-        queryFn: () => fetchPokemon(option.pokemonId),
-      })) ?? [],
-  });
+  const {
+    unlockPokemon,
+    activeMember: screenActiveMember,
+    partyMembers,
+    partyPokemonQueryError,
+    partyPokemonQueryLoading,
+    retryPartyPokemon,
+    movePreviewNames,
+    movePreviewError,
+    movePreviewLoading,
+    getMovePreview,
+    retryMovePreviews,
+    previewMove,
+    previewPattern,
+    pendingEvolution,
+    evolutionOptions,
+    evolutionPokemonError,
+    retryEvolutionPokemon,
+    encounterNumber,
+    encountersPerArea,
+    areaProgress,
+    shopDue,
+    shopProgressReached,
+    evolveFromBaseHp,
+  } = screen;
   const pathname = usePathname();
   const { throwBall } = useLocalSearchParams<{ throwBall?: string | string[] }>();
   const handledThrow = useRef<string | null>(null);
@@ -112,11 +101,7 @@ export default function BattleScreen() {
 
   useEffect(() => {
     const shopProgress = battle.profile?.shopProgress;
-    const shouldOpenShop =
-      battle.profile?.encounterComplete &&
-      !battle.profile.pendingCatch &&
-      shopProgress !== undefined &&
-      shopProgress >= SHOP_CONFIG.encountersPerShop;
+    const shouldOpenShop = shopDue;
 
     if (!shouldOpenShop) {
       shopRedirectProgress.current = null;
@@ -129,6 +114,7 @@ export default function BattleScreen() {
     if (
       !battle.busy &&
       !battle.catchAnimation &&
+      shopProgress !== undefined &&
       shopRedirectProgress.current !== shopProgress
     ) {
       shopRedirectProgress.current = shopProgress;
@@ -140,6 +126,7 @@ export default function BattleScreen() {
     battle.profile?.encounterComplete,
     battle.profile?.pendingCatch,
     battle.profile?.shopProgress,
+    shopDue,
     pathname,
   ]);
 
@@ -163,36 +150,10 @@ export default function BattleScreen() {
     );
   }
   const profile = battle.state.profile;
-  const activeEvolution = profile.pendingEvolutions.find(
-    (evolution) => !evolution.prompted
-  );
-  const activeMember = profile.party.find((member) => member.slot === profile.activeSlot);
-  const selectedUnlock =
-    profile.pendingMoveUnlocks.find((unlock) => unlock.slot === selectedUnlockSlot) ??
-    profile.pendingMoveUnlocks[0];
-  const unlockMember = selectedUnlock
-    ? profile.party.find(
-        (member) =>
-          member.slot === selectedUnlock.slot && member.pokemonId === selectedUnlock.pokemonId
-      )
-    : undefined;
-  const unlockMemberIndex = unlockMember
-    ? profile.party.findIndex((member) => member.slot === unlockMember.slot)
-    : -1;
-  const unlockPokemon = partyPokemonQueries[unlockMemberIndex]?.data;
-  const activePreviewMoveName = selectedUnlockedMove ?? previewMoveName;
-  const previewMove = movePreviewQuery.data?.find(
-    (move) => move.name === activePreviewMoveName
-  );
-  const previewPattern =
-    previewMove && unlockPokemon && unlockMember
-      ? getMovePattern(previewMove, unlockPokemon.stats, {
-          level: unlockMember.level,
-          currentHp: unlockMember.currentHp,
-          maxHp: unlockMember.maxHp,
-          lastPhysicalDamageTaken: unlockMember.lastPhysicalDamageTaken,
-        })
-      : null;
+  const activeEvolution = pendingEvolution;
+  const activeMember = screenActiveMember;
+  const selectedUnlock = screen.selectedUnlock;
+  const unlockMember = screen.unlockMember;
   if (!activeMember) {
     return (
       <ScreenState
@@ -268,10 +229,6 @@ export default function BattleScreen() {
   const dimensions = dimensionsCandidate;
 
   const hpPercent = Math.max(0, Math.min(100, (activeMember.currentHp / activeMember.maxHp) * 100));
-  const encounterNumber = profile.encounterIndex + 1;
-  const areaProgress =
-    (encounterNumber / AREA_PROGRESSION_CONFIG.encountersPerArea) * 100;
-  const shopDue = profile.shopProgress >= SHOP_CONFIG.encountersPerShop;
 
   function continueAfterDefeat() {
     if (shopDue) {
@@ -321,7 +278,7 @@ export default function BattleScreen() {
               {area.name.toUpperCase()} · AREA {profile.areaNumber}
             </ThemedText>
             <ThemedText style={styles.progressEncounter}>
-              {profile.encounterIndex + 1}/{AREA_PROGRESSION_CONFIG.encountersPerArea}
+              {encounterNumber}/{encountersPerArea}
             </ThemedText>
           </View>
           <View
@@ -329,7 +286,7 @@ export default function BattleScreen() {
             accessibilityLabel={`${area.name} area progress`}
             accessibilityValue={{
               min: 0,
-              max: AREA_PROGRESSION_CONFIG.encountersPerArea,
+              max: encountersPerArea,
               now: encounterNumber,
             }}
             style={styles.progressTrack}>
@@ -497,7 +454,7 @@ export default function BattleScreen() {
               Choose a teammate to release and replace with {capitalize(bossPokemon.name)}.
               This choice is saved if you leave the screen.
             </ThemedText>
-            {partyPokemonQueries.some((query) => query.error) ? (
+            {partyPokemonQueryError ? (
               <View style={styles.replacementError}>
                 <ThemedText style={styles.replacementHint}>
                   Some Pokémon names could not be loaded. You can still choose by ID.
@@ -505,15 +462,15 @@ export default function BattleScreen() {
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => {
-                    void Promise.all(partyPokemonQueries.map((query) => query.refetch()));
+                    retryPartyPokemon();
                   }}
                   style={styles.retryNamesButton}>
                   <Text style={styles.retryNamesText}>Retry names</Text>
                 </Pressable>
               </View>
             ) : null}
-            {profile.party.map((member, index) => {
-              const pokemon = partyPokemonQueries[index]?.data;
+            {partyMembers.map((member) => {
+              const pokemon = member.pokemon;
               const label = pokemon
                 ? capitalize(pokemon.name)
                 : `Pokémon #${member.pokemonId}`;
@@ -543,7 +500,7 @@ export default function BattleScreen() {
         !battle.bossDefeated ? (
           <Pressable
             accessibilityRole="button"
-            disabled={battle.busy || profile.shopProgress >= SHOP_CONFIG.encountersPerShop}
+            disabled={battle.busy || shopProgressReached}
             onPress={() => void battle.startNewEncounter()}
             style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
             <Text style={styles.primaryButtonText}>CONTINUE RUN</Text>
@@ -697,24 +654,22 @@ export default function BattleScreen() {
             <Text style={styles.modalDescription}>
               Choose an evolution now, or wait and evolve this Pokémon for free in the shop.
             </Text>
-            {activeEvolution?.options.map((option, index) => {
-              const query = evolutionPokemonQueries[index];
+            {evolutionOptions.map(({ option, pokemon, isPending }) => {
               return (
                 <Pressable
                   accessibilityRole="button"
-                  disabled={savingEvolution || !query?.data}
+                  disabled={savingEvolution || !pokemon}
                   key={option.pokemonId}
                   onPress={async () => {
-                    if (!activeEvolution || !query?.data) return;
+                    if (!activeEvolution || !pokemon) return;
                     setSavingEvolution(true);
                     setEvolutionError(null);
                     try {
-                      await battle.evolvePokemon(
+                      await evolveFromBaseHp(
                         activeEvolution.slot,
                         option.pokemonId,
-                        getPlayerMaxHp(query.data.stats.hp),
-                        option.minimumLevel,
-                        'level-up'
+                        pokemon.stats.hp,
+                        option.minimumLevel
                       );
                     } catch (error) {
                       setEvolutionError(
@@ -726,27 +681,25 @@ export default function BattleScreen() {
                       setSavingEvolution(false);
                     }
                   }}
-                  style={[styles.evolutionOption, !query?.data && styles.disabledButton]}>
-                  {query?.data ? (
-                    <PokemonSprite pokemon={query.data} size={38} />
+                  style={[styles.evolutionOption, !pokemon && styles.disabledButton]}>
+                  {pokemon ? (
+                    <PokemonSprite pokemon={pokemon} size={38} />
                   ) : null}
                   <Text style={styles.optionText}>
-                    {query?.isPending
+                    {isPending
                       ? 'Loading evolution…'
                       : `Evolve into ${capitalize(option.name)}`}
                   </Text>
                 </Pressable>
               );
             })}
-            {evolutionPokemonQueries.some((query) => query.error) ? (
+            {evolutionPokemonError ? (
               <View style={styles.replacementError}>
                 <Text style={styles.modalError}>Evolution data could not be loaded.</Text>
                 <Pressable
                   accessibilityRole="button"
                   onPress={() =>
-                    void Promise.all(
-                      evolutionPokemonQueries.map((query) => query.refetch())
-                    )
+                    retryEvolutionPokemon()
                   }
                   style={styles.retryNamesButton}>
                   <Text style={styles.retryNamesText}>Retry</Text>
@@ -846,17 +799,32 @@ export default function BattleScreen() {
                 <ThemedText style={styles.modalDescription}>
                   Select an unlocked move to learn it. Skipped moves can be learned later in the shop.
                 </ThemedText>
+                {partyPokemonQueryLoading ? (
+                  <ThemedText style={styles.emptySlotHint}>
+                    Loading party Pokémon details…
+                  </ThemedText>
+                ) : null}
+                {partyPokemonQueryError ? (
+                  <View style={styles.replacementError}>
+                    <ThemedText style={styles.modalError}>
+                      {partyPokemonQueryError instanceof Error
+                        ? partyPokemonQueryError.message
+                        : 'Party Pokémon details could not be loaded.'}
+                    </ThemedText>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        retryPartyPokemon();
+                      }}
+                      style={styles.retryNamesButton}>
+                      <Text style={styles.retryNamesText}>Retry Pokémon details</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
                 {profile.pendingMoveUnlocks.length > 1 ? (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                     <View style={styles.unlockMemberChoices}>
-                      {profile.pendingMoveUnlocks.map((unlock) => {
-                        const member = profile.party.find(
-                          (candidate) => candidate.slot === unlock.slot
-                        );
-                        const memberIndex = profile.party.findIndex(
-                          (candidate) => candidate.slot === unlock.slot
-                        );
-                        const memberPokemon = partyPokemonQueries[memberIndex]?.data;
+                      {screen.moveUnlockMembers.map(({ unlock, member, pokemon: memberPokemon }) => {
                         return (
                           <Pressable
                             accessibilityRole="button"
@@ -890,18 +858,9 @@ export default function BattleScreen() {
                 <ThemedText style={styles.modalSectionTitle}>CURRENT MOVES</ThemedText>
                 <View style={styles.unlockOptions}>
                   {unlockMember?.moves.map((move) => {
-                    const moveDetails = movePreviewQuery.data?.find(
-                      (candidate) => candidate.name === move
-                    );
-                    const pattern =
-                      moveDetails && unlockPokemon && unlockMember
-                        ? getMovePattern(moveDetails, unlockPokemon.stats, {
-                            level: unlockMember.level,
-                            currentHp: unlockMember.currentHp,
-                            maxHp: unlockMember.maxHp,
-                            lastPhysicalDamageTaken: unlockMember.lastPhysicalDamageTaken,
-                          })
-                        : null;
+                    const movePreview = getMovePreview(move);
+                    const moveDetails = movePreview?.move;
+                    const pattern = movePreview?.pattern ?? null;
                     return (
                       <Pressable
                         accessibilityRole="button"
@@ -939,19 +898,19 @@ export default function BattleScreen() {
                     </ThemedText>
                   ) : null}
                 </View>
-                {movePreviewQuery.isPending && movePreviewNames.length > 0 ? (
+                {movePreviewLoading && movePreviewNames.length > 0 ? (
                   <ThemedText style={styles.emptySlotHint}>Loading move previews…</ThemedText>
                 ) : null}
-                {movePreviewQuery.error ? (
+                {movePreviewError ? (
                   <View style={styles.replacementError}>
                     <ThemedText style={styles.modalError}>
-                      {movePreviewQuery.error instanceof Error
-                        ? movePreviewQuery.error.message
+                      {movePreviewError instanceof Error
+                        ? movePreviewError.message
                         : 'Move details could not be loaded.'}
                     </ThemedText>
                     <Pressable
                       accessibilityRole="button"
-                      onPress={() => void movePreviewQuery.refetch()}
+                      onPress={retryMovePreviews}
                       style={styles.retryNamesButton}>
                       <Text style={styles.retryNamesText}>Retry move details</Text>
                     </Pressable>
@@ -968,18 +927,9 @@ export default function BattleScreen() {
                 <ScrollView style={styles.unlockedMovesList} showsVerticalScrollIndicator>
                   <View style={styles.unlockOptions}>
                     {selectedUnlock?.moves.map((move) => {
-                      const moveDetails = movePreviewQuery.data?.find(
-                        (candidate) => candidate.name === move
-                      );
-                      const pattern =
-                        moveDetails && unlockPokemon && unlockMember
-                          ? getMovePattern(moveDetails, unlockPokemon.stats, {
-                              level: unlockMember.level,
-                              currentHp: unlockMember.currentHp,
-                              maxHp: unlockMember.maxHp,
-                              lastPhysicalDamageTaken: unlockMember.lastPhysicalDamageTaken,
-                            })
-                          : null;
+                      const movePreview = getMovePreview(move);
+                      const moveDetails = movePreview?.move;
+                      const pattern = movePreview?.pattern ?? null;
                       return (
                         <View
                           key={move}

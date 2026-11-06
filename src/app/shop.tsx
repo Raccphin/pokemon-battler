@@ -1,89 +1,61 @@
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useBattleController } from '@/hooks/use-battle-controller';
+import { useShopController } from '@/hooks/use-shop-controller';
 import { ScreenState } from '@/components/screen-state';
 import { MovePatternPreview } from '@/components/battle/move-pattern-preview';
 import { ThemedText } from '@/components/themed-text';
 import { PokemonSprite } from '@/components/pokemon-sprite';
-import { usePlayer } from '@/providers/player-provider';
-import {
-  MOVE_LEARNING_PRICE,
-  SHOP_CONFIG,
-  getShopItemLabel,
-} from '@/services/shop';
-import {
-  fetchPokemon,
-  fetchPokemonEvolutions,
-  fetchPokemonShopMoves,
-} from '@/services/pokeapi';
-import { getMoveLabel, getPlayerMaxHp } from '@/services/battle-rules';
-import { getMovePattern } from '@/services/move-patterns';
-import type { ShopItemKey } from '@/types/game';
-
-const SHOP_ITEMS: ShopItemKey[] = ['potion', 'revive', 'pokeBall', 'greatBall', 'ultraBall'];
+import { getMoveLabel } from '@/utils/labels';
 
 export default function ShopScreen() {
+  const shop = useShopController();
   const {
     state,
     operationError,
     retry,
-    purchaseItem,
-    learnMove,
-    evolvePokemon,
     debugWipeSaveData,
-  } = usePlayer();
-  const queryClient = useQueryClient();
-  const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
-  const [selectedMove, setSelectedMove] = useState<string | null>(null);
-  const [replacedMove, setReplacedMove] = useState<string | null>(null);
-  const [confirmMovePurchase, setConfirmMovePurchase] = useState(false);
-  const [learning, setLearning] = useState(false);
-  const [learningError, setLearningError] = useState<string | null>(null);
-  const [evolvingOption, setEvolvingOption] = useState<string | null>(null);
-  const [evolutionError, setEvolutionError] = useState<string | null>(null);
-  const battle = useBattleController();
-  const selectedPartyMember =
-    state.status === 'ready'
-      ? state.profile.party.find((member) => member.slot === selectedSlot) ??
-        state.profile.party[0]
-      : undefined;
-  const partyPokemonQueries = useQueries({
-    queries:
-      state.status === 'ready'
-        ? state.profile.party.map((member) => ({
-            queryKey: ['pokemon', member.pokemonId, member.moves],
-            queryFn: () => fetchPokemon(member.pokemonId, member.moves),
-          }))
-        : [],
-  });
-  const partyEvolutionQueries = useQueries({
-    queries:
-      state.status === 'ready'
-        ? state.profile.party.map((member) => ({
-            queryKey: ['pokemon-evolutions', member.pokemonId],
-            queryFn: () => fetchPokemonEvolutions(member.pokemonId),
-          }))
-        : [],
-  });
-  const learnsetQuery = useQuery({
-    queryKey: [
-      'pokemon-shop-moves',
-      selectedPartyMember?.pokemonId,
-      selectedPartyMember?.level,
-    ],
-    queryFn: () => {
-      if (!selectedPartyMember) throw new Error('Choose a Pokémon first.');
-      return fetchPokemonShopMoves(
-        selectedPartyMember.pokemonId,
-        selectedPartyMember.level
-      );
-    },
-    enabled: selectedPartyMember !== undefined,
-  });
+    battle,
+    selectedMember,
+    selectedPokemon,
+    partyMembers,
+    learnsetData,
+    learnsetLoading,
+    learnsetError,
+    retryLearnset,
+    evolutionChoices,
+    evolutionDataError,
+    learnableMoves,
+    previewMove,
+    previewPattern,
+    shopDue,
+    shopItems,
+    moveLearningPrice,
+    canAffordMoveLearning,
+    canTeachSelectedMove,
+    encountersPerShop,
+    partyPokemonError,
+    partyEvolutionLoading,
+    selectedMove,
+    setSelectedMove,
+    replacedMove,
+    setReplacedMove,
+    confirmMovePurchase,
+    setConfirmMovePurchase,
+    learning,
+    learningError,
+    setLearningError,
+    purchaseError,
+    evolvingOption,
+    evolutionError,
+    choosePartyMember,
+    retryPartyPokemon,
+    retryPartyEvolutions,
+    handlePurchase,
+    handleLearnMove,
+    handleEvolution,
+  } = shop;
 
   if (state.status === 'loading') {
     return <ScreenState title="Loading the shop" message="Restoring your coin pouch." loading />;
@@ -100,102 +72,6 @@ export default function ShopScreen() {
   }
 
   const { profile } = state;
-  const selectedMember = selectedPartyMember;
-  const selectedMemberIndex = selectedMember
-    ? profile.party.findIndex((member) => member.slot === selectedMember.slot)
-    : -1;
-  const selectedPokemon = partyPokemonQueries[selectedMemberIndex]?.data;
-  const evolutionChoices = profile.party.flatMap((member, index) => {
-    const savedOffer = profile.pendingEvolutions.find(
-      (evolution) =>
-        evolution.slot === member.slot && evolution.pokemonId === member.pokemonId
-    );
-    const availableOptions =
-      partyEvolutionQueries[index]?.data?.filter(
-        (option) => option.minimumLevel <= member.level
-      ) ?? [];
-    const options = [
-      ...(savedOffer?.options ?? []),
-      ...availableOptions.filter(
-        (option) =>
-          !savedOffer?.options.some(
-            (savedOption) => savedOption.pokemonId === option.pokemonId
-          )
-      ),
-    ];
-    return options.length > 0 ? [{ member, options }] : [];
-  });
-  const evolutionDataError = partyEvolutionQueries.some((query) => query.error);
-  const learnableMoves =
-    learnsetQuery.data?.filter((move) => !selectedMember?.moves.includes(move.name)) ?? [];
-  const previewMove = learnsetQuery.data?.find((move) => move.name === selectedMove);
-  const previewPattern =
-    previewMove && selectedPokemon && selectedMember
-      ? getMovePattern(previewMove, selectedPokemon.stats, {
-          level: selectedMember.level,
-          currentHp: selectedMember.currentHp,
-          maxHp: selectedMember.maxHp,
-          lastPhysicalDamageTaken: selectedMember.lastPhysicalDamageTaken,
-        })
-      : null;
-  const shopDue =
-    profile.encounterComplete &&
-    profile.shopProgress >= SHOP_CONFIG.encountersPerShop;
-
-  async function handlePurchase(item: ShopItemKey) {
-    try {
-      await purchaseItem(item);
-    } catch {
-      // The provider stores the failure message in operationError.
-    }
-  }
-
-  async function handleLearnMove() {
-    if (!selectedMember || !selectedMove) return;
-    setLearning(true);
-    setLearningError(null);
-    try {
-      await learnMove(
-        selectedMember.slot,
-        selectedMove,
-        selectedMember.moves.length >= 4 ? replacedMove : null,
-        'shop'
-      );
-      setSelectedMove(null);
-      setReplacedMove(null);
-      setConfirmMovePurchase(false);
-    } catch (error) {
-      setLearningError(error instanceof Error ? error.message : 'The move could not be learned.');
-    } finally {
-      setLearning(false);
-    }
-  }
-
-  async function handleEvolution(slot: number, pokemonId: number, minimumLevel: number) {
-    const key = `${slot}:${pokemonId}`;
-    setEvolvingOption(key);
-    setEvolutionError(null);
-    try {
-      const pokemon = await queryClient.fetchQuery({
-        queryKey: ['pokemon', pokemonId, []],
-        queryFn: () => fetchPokemon(pokemonId),
-      });
-      await evolvePokemon(
-        slot,
-        pokemonId,
-        getPlayerMaxHp(pokemon.stats.hp),
-        minimumLevel,
-        'shop'
-      );
-    } catch (error) {
-      setEvolutionError(
-        error instanceof Error ? error.message : 'The Pokémon could not evolve.'
-      );
-    } finally {
-      setEvolvingOption(null);
-    }
-  }
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
@@ -213,26 +89,27 @@ export default function ShopScreen() {
           <ThemedText style={styles.walletValue}>{profile.money}</ThemedText>
         </View>
 
-        {operationError ? (
+        {operationError || purchaseError ? (
           <View style={styles.errorCard}>
-            <ThemedText style={styles.errorText}>{operationError}</ThemedText>
+            <ThemedText style={styles.errorText}>
+              {purchaseError ?? operationError}
+            </ThemedText>
           </View>
         ) : null}
 
         <View style={styles.items}>
-          {SHOP_ITEMS.map((item) => {
-            const price = SHOP_CONFIG.prices[item];
-            const canAfford = profile.money >= price;
-            const unavailable = !canAfford;
+          {shopItems.map((item) => {
+            const price = item.price;
+            const unavailable = !item.canAfford;
 
             return (
               <Pressable
                 accessibilityRole="button"
                 disabled={unavailable}
-                key={item}
-                onPress={() => void handlePurchase(item)}
+                key={item.key}
+                onPress={() => void handlePurchase(item.key)}
                 style={[styles.item, unavailable && styles.disabled]}>
-                <ThemedText style={styles.itemName}>{getShopItemLabel(item)}</ThemedText>
+                <ThemedText style={styles.itemName}>{item.label}</ThemedText>
                 <ThemedText style={styles.itemMeta}>{price} coins</ThemedText>
                 <ThemedText style={styles.itemAction}>Tap to buy</ThemedText>
               </Pressable>
@@ -243,7 +120,7 @@ export default function ShopScreen() {
         <View style={styles.moveLearningCard}>
           <ThemedText style={styles.sectionTitle}>TEACH A MOVE</ThemedText>
           <ThemedText style={styles.footerText}>
-            Learn an eligible level-up or TM-compatible move for {MOVE_LEARNING_PRICE} coins.
+            Learn an eligible level-up or TM-compatible move for {moveLearningPrice} coins.
             Level-up moves must be unlocked by this Pokémon’s current level.
           </ThemedText>
           {!selectedMember ? (
@@ -252,8 +129,8 @@ export default function ShopScreen() {
             <>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.pokemonChoices}>
-                  {profile.party.map((member, index) => {
-                    const pokemon = partyPokemonQueries[index]?.data;
+                  {partyMembers.map((member) => {
+                    const pokemon = member.pokemon;
                     return (
                       <Pressable
                         accessibilityRole="button"
@@ -264,10 +141,7 @@ export default function ShopScreen() {
                         }
                         key={member.slot}
                         onPress={() => {
-                          setSelectedSlot(member.slot);
-                          setSelectedMove(null);
-                          setReplacedMove(null);
-                          setLearningError(null);
+                          choosePartyMember(member.slot);
                         }}
                         style={[
                           styles.pokemonChoice,
@@ -291,43 +165,39 @@ export default function ShopScreen() {
                 </View>
               </ScrollView>
 
-              {partyPokemonQueries.some((query) => query.error) ? (
+              {partyPokemonError ? (
                 <View style={styles.catalogError}>
                   <ThemedText style={styles.errorText}>
                     Pokémon details could not be loaded.
                   </ThemedText>
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() =>
-                      void Promise.all(
-                        partyPokemonQueries.map((query) => query.refetch())
-                      )
-                    }
+                    onPress={retryPartyPokemon}
                     style={styles.retryButton}>
                     <ThemedText style={styles.retryText}>Retry</ThemedText>
                   </Pressable>
                 </View>
               ) : null}
 
-              {learnsetQuery.isPending ? (
+              {learnsetLoading ? (
                 <ThemedText style={styles.footerText}>Loading this Pokémon’s learnset…</ThemedText>
               ) : null}
-              {learnsetQuery.error ? (
+              {learnsetError ? (
                 <View style={styles.catalogError}>
                   <ThemedText style={styles.errorText}>
-                    {learnsetQuery.error instanceof Error
-                      ? learnsetQuery.error.message
+                    {learnsetError instanceof Error
+                      ? learnsetError.message
                       : 'Could not load this Pokémon’s moves.'}
                   </ThemedText>
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() => void learnsetQuery.refetch()}
+                    onPress={retryLearnset}
                     style={styles.retryButton}>
                     <ThemedText style={styles.retryText}>Retry</ThemedText>
                   </Pressable>
                 </View>
               ) : null}
-              {learnsetQuery.data ? (
+              {learnsetData ? (
                 <>
                   <ThemedText style={styles.moveSectionLabel}>CURRENT MOVES</ThemedText>
                   {selectedMember.moves.length > 0 ? (
@@ -400,10 +270,7 @@ export default function ShopScreen() {
                   <Pressable
                     accessibilityRole="button"
                     disabled={
-                      learning ||
-                      !selectedMove ||
-                      profile.money < MOVE_LEARNING_PRICE ||
-                      (selectedMember.moves.length >= 4 && !replacedMove)
+                      !canTeachSelectedMove
                     }
                     onPress={() => {
                       if (selectedMember.moves.length >= 4) {
@@ -414,22 +281,19 @@ export default function ShopScreen() {
                     }}
                     style={[
                       styles.teachButton,
-                      (!selectedMove ||
-                        profile.money < MOVE_LEARNING_PRICE ||
-                        (selectedMember.moves.length >= 4 && !replacedMove)) &&
-                        styles.disabled,
+                      !canTeachSelectedMove && styles.disabled,
                     ]}>
                     <ThemedText style={styles.teachButtonText}>
                       {learning
                         ? 'PURCHASING…'
                         : selectedMove && selectedMember.moves.length >= 4 && replacedMove
-                          ? `REPLACE ${getMoveLabel(replacedMove).toUpperCase()} WITH ${getMoveLabel(selectedMove).toUpperCase()} · ${MOVE_LEARNING_PRICE} COINS`
-                          : `LEARN MOVE · ${MOVE_LEARNING_PRICE} COINS`}
+                          ? `REPLACE ${getMoveLabel(replacedMove).toUpperCase()} WITH ${getMoveLabel(selectedMove).toUpperCase()} · ${moveLearningPrice} COINS`
+                          : `LEARN MOVE · ${moveLearningPrice} COINS`}
                     </ThemedText>
                   </Pressable>
-                  {profile.money < MOVE_LEARNING_PRICE ? (
+                  {!canAffordMoveLearning ? (
                     <ThemedText style={styles.footerText}>
-                      You need {MOVE_LEARNING_PRICE - profile.money} more coins to learn a move.
+                      You need {moveLearningPrice - profile.money} more coins to learn a move.
                     </ThemedText>
                   ) : null}
                 </>
@@ -441,13 +305,13 @@ export default function ShopScreen() {
 
         {evolutionChoices.length > 0 ||
         evolutionDataError ||
-        partyEvolutionQueries.some((query) => query.isPending) ? (
+        partyEvolutionLoading ? (
           <View style={styles.evolutionCard}>
             <ThemedText style={styles.sectionTitle}>EVOLVE A POKÉMON</ThemedText>
             <ThemedText style={styles.footerText}>
               Evolve any eligible party Pokémon for free.
             </ThemedText>
-            {partyEvolutionQueries.some((query) => query.isPending) ? (
+            {partyEvolutionLoading ? (
               <ThemedText style={styles.footerText}>Checking your party for available evolutions…</ThemedText>
             ) : null}
             {evolutionDataError ? (
@@ -458,20 +322,14 @@ export default function ShopScreen() {
                 <Pressable
                   accessibilityRole="button"
                   onPress={() =>
-                    void Promise.all(
-                      partyEvolutionQueries.map((query) => query.refetch())
-                    )
+                    retryPartyEvolutions()
                   }
                   style={styles.retryButton}>
                   <ThemedText style={styles.retryText}>Retry</ThemedText>
                 </Pressable>
               </View>
             ) : null}
-            {evolutionChoices.map(({ member, options }) => {
-              const index = profile.party.findIndex(
-                (candidate) => candidate.slot === member.slot
-              );
-              const pokemon = partyPokemonQueries[index]?.data;
+            {evolutionChoices.map(({ member, options, pokemon }) => {
               return (
                 <View key={`${member.slot}:${member.pokemonId}`} style={styles.evolutionParty}>
                   <View style={styles.evolutionMember}>
@@ -537,7 +395,7 @@ export default function ShopScreen() {
               <ThemedText style={styles.confirmTitle}>Replace this move?</ThemedText>
               <ThemedText style={styles.footerText}>
                 {selectedMove && replacedMove
-                  ? `Learn ${getMoveLabel(selectedMove)} instead of ${getMoveLabel(replacedMove)}? This costs ${MOVE_LEARNING_PRICE} coins and cannot be undone without purchasing the old move again.`
+                  ? `Learn ${getMoveLabel(selectedMove)} instead of ${getMoveLabel(replacedMove)}? This costs ${moveLearningPrice} coins and cannot be undone without purchasing the old move again.`
                   : 'This move replacement cannot be undone without purchasing the old move again.'}
               </ThemedText>
               <View style={styles.confirmActions}>
@@ -573,7 +431,7 @@ export default function ShopScreen() {
           </>
         ) : (
           <ThemedText style={styles.footerText}>
-            The shop will open automatically after {SHOP_CONFIG.encountersPerShop} encounters.
+            The shop will open automatically after {encountersPerShop} encounters.
           </ThemedText>
         )}
       </ScrollView>

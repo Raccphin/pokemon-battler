@@ -4,7 +4,8 @@ import { StyleSheet, View } from 'react-native';
 import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ThemedText } from '@/components/themed-text';
 import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
-import { getMoveLabel, getMoveStatusChance } from '@/services/battle-rules';
+import { getMoveStatusChance } from '@/services/battle-rules';
+import { getMoveLabel } from '@/utils/labels';
 import type { MovePattern, Pokemon, PokemonMove } from '@/types/game';
 
 interface MovePatternPreviewProps {

@@ -1,6 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
 import { Redirect, router } from 'expo-router';
-import { useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -8,11 +6,7 @@ import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ScreenState } from '@/components/screen-state';
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { usePlayer } from '@/providers/player-provider';
-import { getPlayerMaxHp } from '@/services/battle-rules';
-import { getInitialMoveNames } from '@/services/move-learning';
-import { fetchPokemonLevelUpMoves } from '@/services/pokeapi';
-import { fetchStarterOptions, type StarterOption } from '@/services/starter-selection';
+import { useStarterSelectionController } from '@/hooks/use-starter-selection-controller';
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
@@ -20,15 +14,22 @@ function capitalize(value: string): string {
 
 export default function StarterSelectionScreen() {
   const theme = useTheme();
-  const { state, selectStarter, retry, debugWipeSaveData } = usePlayer();
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [confirmError, setConfirmError] = useState<string | null>(null);
-  const starterQuery = useQuery({
-    queryKey: ['starter-options'],
-    queryFn: fetchStarterOptions,
-    enabled: state.status === 'ready' && !state.profile.starterSelected,
-  });
+  const starter = useStarterSelectionController();
+  const {
+    state,
+    retry,
+    debugWipeSaveData,
+    starterOptions,
+    starterLoading,
+    starterError,
+    retryStarters,
+    selectedId,
+    selectedPokemon,
+    chooseStarter,
+    confirming,
+    confirmError,
+    confirmSelection,
+  } = starter;
 
   if (state.status === 'loading') {
     return <ScreenState title="Loading your save" message="Checking your run progress." loading />;
@@ -46,7 +47,7 @@ export default function StarterSelectionScreen() {
   if (state.profile.starterSelected) {
     return <Redirect href="/" />;
   }
-  if (starterQuery.isPending) {
+  if (starterLoading) {
     return (
       <ScreenState
         title="Finding your starters"
@@ -55,42 +56,18 @@ export default function StarterSelectionScreen() {
       />
     );
   }
-  if (starterQuery.error || !starterQuery.data) {
+  if (starterError || !starterOptions) {
     return (
       <ScreenState
         title="Starters unavailable"
         message={
-          starterQuery.error instanceof Error
-            ? starterQuery.error.message
+          starterError instanceof Error
+            ? starterError.message
             : 'PokéAPI could not provide starter choices.'
         }
-        onRetry={() => {
-          void starterQuery.refetch();
-        }}
+        onRetry={retryStarters}
       />
     );
-  }
-
-  const selectedPokemon = starterQuery.data.find((pokemon) => pokemon.id === selectedId);
-
-  async function confirmSelection(pokemon: StarterOption) {
-    setConfirming(true);
-    setConfirmError(null);
-    try {
-      const learnableMoves = await fetchPokemonLevelUpMoves(pokemon.id, 1);
-      await selectStarter(
-        pokemon.id,
-        getPlayerMaxHp(pokemon.hp),
-        getInitialMoveNames(learnableMoves)
-      );
-      router.replace('/');
-    } catch (error) {
-      setConfirmError(
-        error instanceof Error ? error.message : 'The starter could not be saved. Try again.'
-      );
-    } finally {
-      setConfirming(false);
-    }
   }
 
   return (
@@ -112,7 +89,7 @@ export default function StarterSelectionScreen() {
           style={styles.scroll}
           contentContainerStyle={styles.choices}
           showsVerticalScrollIndicator={Platform.OS !== 'web'}>
-          {starterQuery.data.map((pokemon) => {
+          {starterOptions.map((pokemon) => {
             const selected = pokemon.id === selectedId;
             return (
               <Pressable
@@ -121,8 +98,7 @@ export default function StarterSelectionScreen() {
                 accessibilityState={{ checked: selected }}
                 accessibilityLabel={`${capitalize(pokemon.name)}, ${pokemon.types.join(' and ')} type`}
                 onPress={() => {
-                  setSelectedId(pokemon.id);
-                  setConfirmError(null);
+                  chooseStarter(pokemon.id);
                 }}
                 style={[
                   styles.choice,
@@ -152,7 +128,11 @@ export default function StarterSelectionScreen() {
             accessibilityRole="button"
             disabled={!selectedPokemon || confirming}
             onPress={() => {
-              if (selectedPokemon) void confirmSelection(selectedPokemon);
+              if (selectedPokemon) {
+                void confirmSelection(selectedPokemon).then((saved) => {
+                  if (saved) router.replace('/');
+                });
+              }
             }}
             style={({ pressed }) => [
               styles.confirmButton,

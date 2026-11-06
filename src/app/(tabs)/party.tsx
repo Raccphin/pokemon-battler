@@ -4,8 +4,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ScreenState } from '@/components/screen-state';
 import { ThemedText } from '@/components/themed-text';
-import { getMoveLabel } from '@/services/battle-rules';
-import { getMovePattern } from '@/services/move-patterns';
 import { usePartyController } from '@/hooks/use-party-controller';
 
 function capitalize(value: string): string {
@@ -149,22 +147,11 @@ export default function PartyScreen() {
 
             <ThemedText style={styles.sectionTitle}>MOVE PREVIEW</ThemedText>
             <View style={styles.moves}>
-              {selectedMember.pokemon.moves.map((move, index) => {
-                const pokemon = selectedMember.pokemon;
-                if (!pokemon) return null;
-                const pattern = getMovePattern(
-                  move,
-                  pokemon.stats,
-                  {
-                    level: selectedMember.level,
-                    currentHp: selectedMember.currentHp,
-                    maxHp: selectedMember.maxHp,
-                    lastPhysicalDamageTaken: selectedMember.lastPhysicalDamageTaken,
-                  }
-                );
+              {selectedMember.movePreviews.map(({ move, label, pattern }, index) => {
+                if (!pattern) return null;
                 return (
                   <View key={`${move.name}-${index}`} style={styles.moveCard}>
-                    <ThemedText style={styles.moveName}>{getMoveLabel(move.name)}</ThemedText>
+                    <ThemedText style={styles.moveName}>{label}</ThemedText>
                     <ThemedText style={styles.memberMeta}>
                       {pattern.footprintSize}×{pattern.footprintSize} · {move.type} ·{' '}
                       {pattern.hitCells.length} hit cells

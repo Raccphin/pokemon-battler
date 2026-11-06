@@ -20,10 +20,10 @@ import {
   getBossGridDimensions,
   getBossGridHpBlockCount,
   getOpponentHpBlockCount,
-  getMoveLabel,
   getPlayerMaxHp,
   resolveStatusTurn,
 } from '@/services/battle-rules';
+import { getMoveLabel } from '@/utils/labels';
 import { getMovePattern, getPatternCells } from '@/services/move-patterns';
 import {
   createOpponentGrid,

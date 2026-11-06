@@ -1,4 +1,3 @@
-import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -14,23 +13,29 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ScreenState } from '@/components/screen-state';
 import { ThemedText } from '@/components/themed-text';
-import { usePlayer } from '@/providers/player-provider';
-import { fetchPokemon } from '@/services/pokeapi';
-import { AREA_PROGRESSION_CONFIG, AREAS } from '@/services/area-progression';
+import { useGameOverController } from '@/hooks/use-game-over-controller';
 
 export default function GameOverScreen() {
-  const queryClient = useQueryClient();
-  const { state, retry, startNewRun, debugWipeSaveData } = usePlayer();
-  const summary = state.status === 'ready' ? state.profile.runSummary : null;
-  const pokemonQueries = useQueries({
-    queries: (summary?.party ?? []).map((member) => ({
-      queryKey: ['pokemon', member.pokemonId],
-      queryFn: () => fetchPokemon(member.pokemonId),
-    })),
-  });
-  const [busy, setBusy] = useState(false);
+  const gameOver = useGameOverController();
+  const {
+    state,
+    retry,
+    debugWipeSaveData,
+    summary,
+    party,
+    pokemonError,
+    loadingTeam,
+    area,
+    encountersPerArea,
+    clearedEncounters,
+    encounterNumber,
+    retryPokemonData,
+    busy,
+    error,
+    beginNewRun,
+    wipeRun,
+  } = gameOver;
   const [confirmWipe, setConfirmWipe] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   if (state.status === 'loading') {
     return (
@@ -69,7 +74,6 @@ export default function GameOverScreen() {
     );
   }
 
-  const area = AREAS.find((candidate) => candidate.id === summary.areaId);
   if (!area) {
     return (
       <ScreenState
@@ -80,50 +84,6 @@ export default function GameOverScreen() {
       />
     );
   }
-  const pokemonError = pokemonQueries.find((query) => query.error)?.error;
-  const loadingTeam = pokemonQueries.some((query) => query.isPending);
-
-  const clearedEncounters =
-    (summary.areaNumber - 1) * AREA_PROGRESSION_CONFIG.encountersPerArea +
-    summary.encounterIndex;
-  const encounterNumber = summary.encounterIndex + 1;
-
-  async function beginNewRun() {
-    setBusy(true);
-    setError(null);
-    try {
-      queryClient.removeQueries({ queryKey: ['starter-options'] });
-      await startNewRun();
-      router.replace('/starter-selection');
-    } catch (operationError) {
-      setError(
-        operationError instanceof Error
-          ? operationError.message
-          : 'A new run could not be started.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function wipeRun() {
-    setBusy(true);
-    setError(null);
-    try {
-      queryClient.removeQueries({ queryKey: ['starter-options'] });
-      await debugWipeSaveData();
-      router.replace('/starter-selection');
-    } catch (operationError) {
-      setError(
-        operationError instanceof Error
-          ? operationError.message
-          : 'The saved run could not be wiped.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -141,7 +101,7 @@ export default function GameOverScreen() {
             Area {summary.areaNumber} · {area.name}
           </ThemedText>
           <ThemedText style={styles.detailText}>
-            Encounter {encounterNumber} of {AREA_PROGRESSION_CONFIG.encountersPerArea}
+            Encounter {encounterNumber} of {encountersPerArea}
             {summary.opponentIsAreaBoss ? ' · Area boss' : ''}
           </ThemedText>
           <ThemedText style={styles.detailText}>
@@ -169,15 +129,15 @@ export default function GameOverScreen() {
               <Pressable
                 accessibilityRole="button"
                 onPress={() => {
-                  void Promise.all(pokemonQueries.map((query) => query.refetch()));
+                  retryPokemonData();
                 }}
                 style={styles.retryButton}>
                 <Text style={styles.retryButtonText}>Retry team data</Text>
               </Pressable>
             </View>
           ) : null}
-          {summary.party.map((member, index) => {
-            const pokemon = pokemonQueries[index]?.data;
+          {party.map((member) => {
+            const pokemon = member.pokemon;
             return (
               <View key={member.slot} style={styles.memberRow}>
                 <View style={styles.sprite}>
@@ -207,7 +167,11 @@ export default function GameOverScreen() {
         <Pressable
           accessibilityRole="button"
           disabled={busy}
-          onPress={() => void beginNewRun()}
+          onPress={() => {
+            void beginNewRun().then((started) => {
+              if (started) router.replace('/starter-selection');
+            });
+          }}
           style={({ pressed }) => [
             styles.primaryButton,
             busy && styles.disabled,
@@ -229,7 +193,11 @@ export default function GameOverScreen() {
                 <Pressable
                   accessibilityRole="button"
                   disabled={busy}
-                  onPress={() => void wipeRun()}
+                  onPress={() => {
+                    void wipeRun().then((wiped) => {
+                      if (wiped) router.replace('/starter-selection');
+                    });
+                  }}
                   style={[styles.debugButton, busy && styles.disabled]}>
                   <Text style={styles.debugButtonText}>
                     {busy ? 'Wiping…' : 'Confirm wipe'}

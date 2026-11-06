@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { usePlayer } from '@/providers/player-provider';
 import { fetchPokemon, fetchPokemonLevelUpMoves } from '@/services/pokeapi';
 import { getInitialMoveNames } from '@/services/move-learning';
+import { getMovePattern } from '@/services/move-patterns';
+import { getMoveLabel } from '@/utils/labels';
 
 export function usePartyController() {
   const {
@@ -57,6 +59,18 @@ export function usePartyController() {
     profile?.party.map((member, index) => ({
       ...member,
       pokemon: queries[index]?.data,
+      movePreviews: queries[index]?.data?.moves.map((move) => ({
+        move,
+        label: getMoveLabel(move.name),
+        pattern: queries[index]?.data
+          ? getMovePattern(move, queries[index].data.stats, {
+              level: member.level,
+              currentHp: member.currentHp,
+              maxHp: member.maxHp,
+              lastPhysicalDamageTaken: member.lastPhysicalDamageTaken,
+            })
+          : null,
+      })) ?? [],
     })) ?? [];
   const selectedMember =
     members.find((member) => member.slot === selectedSlot) ??

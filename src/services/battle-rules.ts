@@ -295,10 +295,3 @@ export function getBallDetails(ball: 'pokeBall' | 'greatBall' | 'ultraBall') {
       return { label: 'Poké Ball', multiplier: 1, count: 1 };
   }
 }
-
-export function getMoveLabel(move: string): string {
-  return move
-    .split('-')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
