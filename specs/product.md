@@ -13,7 +13,7 @@ The player fights a raid boss by removing blocks from its health grid. The playe
 3. After a successful player attack, the boss uses one of its moves and damages the active Pokémon's regular health bar. The boss faints when all of its grid blocks are removed.
 4. Open the bag to heal or revive a selected party member, or use a Poké Ball to try to catch the boss.
 5. Switch the active Pokémon from the party screen and preview each party member's moves.
-6. As the party levels up, review newly unlocked moves and optionally replace equipped moves. Spend money in the shop to learn other eligible level-up moves.
+6. As the party levels up, review newly unlocked moves and optionally replace equipped moves. Spend money in the shop to learn other eligible level-up or compatible machine moves.
 
 ## Product requirements
 

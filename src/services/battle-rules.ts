@@ -1,5 +1,6 @@
 import type { Pokemon, PokemonMove, StatusEffect } from '@/types/game';
 import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
+import { getMovePatternPower } from '@/services/move-patterns';
 
 export interface GridDimensions {
   rows: number;
@@ -161,35 +162,33 @@ export function getBossGridDimensions(pokemon: Pokemon, isAreaBoss = false): Gri
   };
 }
 
-export function getPatternCells(
-  row: number,
-  column: number,
-  size: PokemonMove['patternSize'],
-  dimensions: GridDimensions
-): number[] {
-  const cells: number[] = [];
-  for (let patternRow = 0; patternRow < size; patternRow += 1) {
-    for (let patternColumn = 0; patternColumn < size; patternColumn += 1) {
-      const targetRow = row + patternRow;
-      const targetColumn = column + patternColumn;
-      if (targetRow < dimensions.rows && targetColumn < dimensions.columns) {
-        cells.push(targetRow * dimensions.columns + targetColumn);
-      }
-    }
-  }
-  return cells;
-}
-
 export function getBossAttack(
   pokemon: Pokemon,
-  turn: number,
-  isAreaBoss = false
-): { move: PokemonMove; damage: number } {
-  const move = pokemon.moves[turn % pokemon.moves.length];
+  random: () => number = Math.random,
+  isAreaBoss = false,
+  currentGridHp = 1,
+  maximumGridHp = 1,
+  level = 1
+): { move: PokemonMove | null; damage: number } {
+  if (pokemon.moves.length === 0) return { move: null, damage: 0 };
+  const index = Math.min(
+    pokemon.moves.length - 1,
+    Math.floor(random() * pokemon.moves.length)
+  );
+  const move = pokemon.moves[index];
   const attack = isAreaBoss
     ? pokemon.stats.attack * AREA_PROGRESSION_CONFIG.bossAttackMultiplier
     : pokemon.stats.attack;
-  const damage = clamp(Math.ceil(attack / 15) + Math.ceil(move.power / 45), 4, 30);
+  const power = getMovePatternPower(move, {
+    level,
+    currentHp: currentGridHp,
+    maxHp: maximumGridHp,
+    lastPhysicalDamageTaken: 0,
+  });
+  const damage =
+    power === null
+      ? 0
+      : clamp(Math.ceil(attack / 15) + Math.ceil(power / 45), 4, 30);
   return { move, damage };
 }
 

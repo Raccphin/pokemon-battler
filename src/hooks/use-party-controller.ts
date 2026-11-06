@@ -1,14 +1,16 @@
 import { useQueries } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { usePlayer } from '@/providers/player-provider';
-import { fetchPokemon } from '@/services/pokeapi';
+import { fetchPokemon, fetchPokemonLevelUpMoves } from '@/services/pokeapi';
+import { getInitialMoveNames } from '@/services/move-learning';
 
 export function usePartyController() {
   const {
     state,
     operationError,
     switchPokemon,
+    initializePartyMoves,
     retry,
     debugWipeSaveData,
   } = usePlayer();
@@ -16,12 +18,41 @@ export function usePartyController() {
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const queries = useQueries({
     queries: (profile?.party ?? []).map((member) => ({
-      queryKey: ['pokemon', member.pokemonId],
-      queryFn: () => fetchPokemon(member.pokemonId),
+      queryKey: ['pokemon', member.pokemonId, member.moves],
+      queryFn: () => fetchPokemon(member.pokemonId, member.moves),
     })),
   });
-  const loading = queries.some((query) => query.isPending);
-  const error = queries.find((query) => query.error)?.error;
+  const membersToInitialize = useMemo(
+    () => profile?.party.filter((member) => !member.movesInitialized) ?? [],
+    [profile?.party]
+  );
+  const initializationQueries = useQueries({
+    queries: (profile?.party ?? []).map((member) => ({
+      queryKey: ['pokemon-level-up-moves', member.pokemonId, member.level],
+      queryFn: () => fetchPokemonLevelUpMoves(member.pokemonId, member.level),
+      enabled: !member.movesInitialized,
+    })),
+  });
+  const loading =
+    queries.some((query) => query.isPending) ||
+    membersToInitialize.some((member) => {
+      const index = profile?.party.findIndex((candidate) => candidate.slot === member.slot) ?? -1;
+      return initializationQueries[index]?.isPending ?? false;
+    });
+  const error =
+    queries.find((query) => query.error)?.error ??
+    initializationQueries.find((query) => query.error)?.error;
+  useEffect(() => {
+    membersToInitialize.forEach((member) => {
+      const index = profile?.party.findIndex((candidate) => candidate.slot === member.slot) ?? -1;
+      const moveQuery = initializationQueries[index];
+      if (!member.movesInitialized && moveQuery?.data) {
+        void initializePartyMoves(member.slot, getInitialMoveNames(moveQuery.data)).catch(
+          () => undefined
+        );
+      }
+    });
+  }, [initializePartyMoves, initializationQueries, membersToInitialize, profile?.party]);
   const members =
     profile?.party.map((member, index) => ({
       ...member,
@@ -42,7 +73,10 @@ export function usePartyController() {
   }
 
   function retryPokemonData() {
-    void Promise.all(queries.map((query) => query.refetch()));
+    void Promise.all([
+      ...queries.map((query) => query.refetch()),
+      ...initializationQueries.map((query) => query.refetch()),
+    ]);
   }
 
   return {

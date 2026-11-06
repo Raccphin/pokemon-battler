@@ -1,7 +1,7 @@
 # Feature: Pokémon data and sprites
 
-- Fetch Pokémon species, base stats, types, move names/power/types, accuracy, damage class, maximum hit count, level-up learnsets, and capture rate from PokeAPI.
-- Use level-up moves from the latest available PokeAPI game version group for each Pokémon. Keep learned-at-level and learn-method data so player and opponent move sets can be filtered by level.
+- Fetch Pokémon species, base stats, types, move names/power/types, accuracy, damage class, maximum hit count, level-up and machine learnsets, and capture rate from PokeAPI.
+- Use level-up moves from the latest available PokeAPI mainline game version group for each Pokémon, excluding side games and retro re-releases even if their numeric group ID is higher. Keep learned-at-level and learn-method data so player and opponent move sets can be filtered by level.
 - Use TanStack Query for all remote Pokémon data, with useful loading, error, and retry UI.
 - Cache requests by Pokédex ID so the battle and party screens share data.
 - Prefer `assets/images/sprites/{id padded}.{png|jpg}` when that image exists. The local sprite is a right-facing image; mirror the opponent sprite on the right side of the battle arena.

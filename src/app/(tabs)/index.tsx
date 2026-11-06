@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useQueries } from '@tanstack/react-query';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 
@@ -12,6 +13,7 @@ import { useBattleController } from '@/hooks/use-battle-controller';
 import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
 import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
 import { getMoveLabel } from '@/services/battle-rules';
+import { fetchPokemon } from '@/services/pokeapi';
 import { SHOP_CONFIG } from '@/services/shop';
 import type { PokemonMove } from '@/types/game';
 import { router, useLocalSearchParams, usePathname } from 'expo-router';
@@ -23,7 +25,20 @@ function capitalize(value: string): string {
 export default function BattleScreen() {
   const gridRef = useRef<React.ElementRef<typeof View>>(null);
   const [confirmWipeSave, setConfirmWipeSave] = useState(false);
+  const [selectedUnlockSlot, setSelectedUnlockSlot] = useState<number | null>(null);
+  const [selectedUnlockedMove, setSelectedUnlockedMove] = useState<string | null>(null);
+  const [selectedReplacedMove, setSelectedReplacedMove] = useState<string | null>(null);
+  const [confirmMoveReplacement, setConfirmMoveReplacement] = useState(false);
+  const [moveLearningError, setMoveLearningError] = useState<string | null>(null);
+  const [savingMove, setSavingMove] = useState(false);
   const battle = useBattleController();
+  const moveUnlockPokemonQueries = useQueries({
+    queries:
+      battle.profile?.party.map((member) => ({
+        queryKey: ['pokemon', member.pokemonId, member.moves],
+        queryFn: () => fetchPokemon(member.pokemonId, member.moves),
+      })) ?? [],
+  });
   const pathname = usePathname();
   const { throwBall } = useLocalSearchParams<{ throwBall?: string | string[] }>();
   const handledThrow = useRef<string | null>(null);
@@ -104,6 +119,15 @@ export default function BattleScreen() {
   }
   const profile = battle.state.profile;
   const activeMember = profile.party.find((member) => member.slot === profile.activeSlot);
+  const selectedUnlock =
+    profile.pendingMoveUnlocks.find((unlock) => unlock.slot === selectedUnlockSlot) ??
+    profile.pendingMoveUnlocks[0];
+  const unlockMember = selectedUnlock
+    ? profile.party.find(
+        (member) =>
+          member.slot === selectedUnlock.slot && member.pokemonId === selectedUnlock.pokemonId
+      )
+    : undefined;
   if (!activeMember) {
     return (
       <ScreenState
@@ -473,6 +497,7 @@ export default function BattleScreen() {
             <MoveCard
               key={`${move.name}-${index}`}
               move={move}
+              pattern={battle.playerMovePatterns[index]}
               selected={battle.selectedMoveIndex === index}
               disabled={!battle.canBattle}
               onSelect={() => {
@@ -490,7 +515,226 @@ export default function BattleScreen() {
           </ThemedText>
         ) : null}
       </ScrollView>
-
+      <Modal
+        animationType="fade"
+        transparent
+        visible={profile.pendingMoveUnlocks.length > 0}
+        onRequestClose={() => undefined}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.moveLearningModal}>
+            {confirmMoveReplacement ? (
+              <>
+                <ThemedText style={styles.modalTitle}>Replace this move?</ThemedText>
+                <ThemedText style={styles.modalDescription}>
+                  Replacing {selectedReplacedMove ? getMoveLabel(selectedReplacedMove) : 'a move'}{' '}
+                  with {selectedUnlockedMove ? getMoveLabel(selectedUnlockedMove) : 'a new move'} is
+                  irreversible without purchasing it again in the shop. Are you sure?
+                </ThemedText>
+                <View style={styles.modalActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={savingMove}
+                    onPress={() => setConfirmMoveReplacement(false)}
+                    style={styles.secondaryButton}>
+                    <ThemedText style={styles.secondaryButtonText}>Go back</ThemedText>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={savingMove || !selectedUnlock || !selectedUnlockedMove}
+                    onPress={async () => {
+                      if (!selectedUnlock || !selectedUnlockedMove || !selectedReplacedMove) return;
+                      setSavingMove(true);
+                      setMoveLearningError(null);
+                      try {
+                        await battle.learnMove(
+                          selectedUnlock.slot,
+                          selectedUnlockedMove,
+                          selectedReplacedMove,
+                          'level-up'
+                        );
+                        setConfirmMoveReplacement(false);
+                        setSelectedUnlockedMove(null);
+                        setSelectedReplacedMove(null);
+                      } catch (error) {
+                        setMoveLearningError(
+                          error instanceof Error ? error.message : 'The move could not be learned.'
+                        );
+                      } finally {
+                        setSavingMove(false);
+                      }
+                    }}
+                    style={styles.primaryButton}>
+                    <Text style={styles.primaryButtonText}>
+                      {savingMove ? 'SAVING…' : 'YES, REPLACE IT'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <>
+                <ThemedText style={styles.modalEyebrow}>LEVEL UP</ThemedText>
+                <ThemedText style={styles.modalTitle}>New moves unlocked!</ThemedText>
+                <ThemedText style={styles.modalDescription}>
+                  Select an unlocked move to learn it. Skipped moves can be learned later in the shop.
+                </ThemedText>
+                {profile.pendingMoveUnlocks.length > 1 ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <View style={styles.unlockMemberChoices}>
+                      {profile.pendingMoveUnlocks.map((unlock) => {
+                        const member = profile.party.find(
+                          (candidate) => candidate.slot === unlock.slot
+                        );
+                        const memberIndex = profile.party.findIndex(
+                          (candidate) => candidate.slot === unlock.slot
+                        );
+                        const memberPokemon = moveUnlockPokemonQueries[memberIndex]?.data;
+                        return (
+                          <Pressable
+                            accessibilityRole="button"
+                            key={unlock.slot}
+                            onPress={() => {
+                              setSelectedUnlockSlot(unlock.slot);
+                              setSelectedUnlockedMove(null);
+                              setSelectedReplacedMove(null);
+                              setMoveLearningError(null);
+                            }}
+                            style={[
+                              styles.unlockMemberChoice,
+                              selectedUnlock?.slot === unlock.slot && styles.selectedOption,
+                            ]}>
+                            {member ? (
+                              <PokemonSprite
+                                pokemon={memberPokemon ?? { id: member.pokemonId, spriteUrl: null }}
+                                size={30}
+                              />
+                            ) : null}
+                            <ThemedText numberOfLines={1} style={styles.optionText}>
+                              {memberPokemon ? capitalize(memberPokemon.name) : 'Loading Pokémon…'}
+                            </ThemedText>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+                ) : null}
+                <ThemedText style={styles.modalSectionTitle}>CURRENT MOVES</ThemedText>
+                <View style={styles.unlockOptions}>
+                  {unlockMember?.moves.map((move) => (
+                    <Pressable
+                      accessibilityRole="button"
+                      key={move}
+                      disabled={unlockMember.moves.length < 4}
+                      onPress={() => setSelectedReplacedMove(move)}
+                      style={[
+                        styles.moveOption,
+                        selectedReplacedMove === move && styles.selectedOption,
+                        unlockMember.moves.length < 4 && styles.unselectableOption,
+                      ]}>
+                      <ThemedText style={styles.optionText}>{getMoveLabel(move)}</ThemedText>
+                    </Pressable>
+                  ))}
+                  {unlockMember && unlockMember.moves.length < 4 ? (
+                    <ThemedText style={styles.emptySlotHint}>
+                      Empty slot available — the next move you learn will fill it.
+                    </ThemedText>
+                  ) : null}
+                </View>
+                <ThemedText style={styles.modalSectionTitle}>NEWLY UNLOCKED</ThemedText>
+                <ScrollView style={styles.unlockedMovesList} showsVerticalScrollIndicator>
+                  <View style={styles.unlockOptions}>
+                    {selectedUnlock?.moves.map((move) => (
+                      <View
+                        key={move}
+                        style={[
+                          styles.moveOption,
+                          selectedUnlockedMove === move && styles.selectedOption,
+                        ]}>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => {
+                            setSelectedUnlockedMove(move);
+                            setMoveLearningError(null);
+                          }}
+                          style={styles.moveOptionSelect}>
+                          <ThemedText style={styles.optionText}>{getMoveLabel(move)}</ThemedText>
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          hitSlop={8}
+                          onPress={() => {
+                            if (!selectedUnlock) return;
+                            if (selectedUnlockedMove === move) setSelectedUnlockedMove(null);
+                            void battle.skipMoveUnlock(selectedUnlock.slot, move).catch((error: unknown) =>
+                              setMoveLearningError(
+                                error instanceof Error ? error.message : 'The move could not be skipped.'
+                              )
+                            );
+                          }}>
+                          <ThemedText style={styles.skipButtonText}>Skip</ThemedText>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                </ScrollView>
+                {moveLearningError ? (
+                  <ThemedText style={styles.modalError}>{moveLearningError}</ThemedText>
+                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={
+                    savingMove ||
+                    !selectedUnlock ||
+                    !unlockMember ||
+                    !selectedUnlockedMove ||
+                    (unlockMember.moves.length >= 4 && !selectedReplacedMove)
+                  }
+                  onPress={async () => {
+                    if (!selectedUnlock || !unlockMember || !selectedUnlockedMove) return;
+                    if (unlockMember.moves.length >= 4) {
+                      setConfirmMoveReplacement(true);
+                      return;
+                    }
+                    setSavingMove(true);
+                    setMoveLearningError(null);
+                    try {
+                      await battle.learnMove(
+                        selectedUnlock.slot,
+                        selectedUnlockedMove,
+                        null,
+                        'level-up'
+                      );
+                      setSelectedUnlockedMove(null);
+                    } catch (error) {
+                      setMoveLearningError(
+                        error instanceof Error ? error.message : 'The move could not be learned.'
+                      );
+                    } finally {
+                      setSavingMove(false);
+                    }
+                  }}
+                  style={[
+                    styles.learnMoveButton,
+                    (!selectedUnlockedMove ||
+                      (unlockMember?.moves.length === 4 && !selectedReplacedMove)) &&
+                      styles.disabledButton,
+                  ]}>
+                  <Text style={styles.primaryButtonText}>
+                    {savingMove
+                      ? 'SAVING…'
+                      : selectedUnlockedMove && unlockMember?.moves.length === 4
+                        ? selectedReplacedMove
+                          ? `REPLACE ${getMoveLabel(selectedReplacedMove).toUpperCase()} WITH ${getMoveLabel(selectedUnlockedMove).toUpperCase()}`
+                          : 'SELECT A CURRENT MOVE TO REPLACE'
+                        : selectedUnlockedMove
+                          ? `LEARN ${getMoveLabel(selectedUnlockedMove).toUpperCase()}`
+                          : 'SELECT A NEW MOVE'}
+                  </Text>
+                </Pressable>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -856,5 +1100,134 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
     textAlign: 'center',
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 18,
+    backgroundColor: 'rgba(27, 38, 46, 0.72)',
+  },
+  moveLearningModal: {
+    maxHeight: '90%',
+    padding: 18,
+    borderRadius: 22,
+    backgroundColor: '#fffaf2',
+    gap: 10,
+  },
+  modalEyebrow: {
+    color: '#b86d51',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+  },
+  modalTitle: {
+    color: '#25394a',
+    fontSize: 23,
+    lineHeight: 28,
+    fontWeight: '900',
+  },
+  modalDescription: {
+    color: '#6f6a61',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  modalSectionTitle: {
+    color: '#39424a',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginTop: 4,
+  },
+  unlockMemberChoices: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 2,
+  },
+  unlockMemberChoice: {
+    maxWidth: 180,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: '#f1eee8',
+  },
+  unlockOptions: {
+    gap: 6,
+  },
+  moveOption: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 11,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: '#e8dfd2',
+    backgroundColor: '#ffffff',
+  },
+  moveOptionSelect: {
+    flex: 1,
+    minHeight: 40,
+    justifyContent: 'center',
+  },
+  selectedOption: {
+    borderColor: '#e65d43',
+    backgroundColor: '#fff0e8',
+  },
+  unselectableOption: {
+    opacity: 0.75,
+  },
+  optionText: {
+    color: '#39424a',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  skipButtonText: {
+    color: '#a4523e',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  emptySlotHint: {
+    color: '#77736b',
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
+  unlockedMovesList: {
+    maxHeight: 170,
+  },
+  modalError: {
+    color: '#a13a39',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  learnMoveButton: {
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: '#e65d43',
+  },
+  disabledButton: {
+    opacity: 0.45,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+  },
+  secondaryButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 13,
+    borderRadius: 14,
+    backgroundColor: '#e8dfd2',
+  },
+  secondaryButtonText: {
+    color: '#39424a',
+    fontSize: 12,
+    fontWeight: '900',
   },
 });

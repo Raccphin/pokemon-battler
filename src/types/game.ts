@@ -1,14 +1,32 @@
-export type MovePatternSize = 1 | 2 | 3;
 export type StatusEffect = 'burn' | 'poison' | 'freeze' | 'paralysis' | 'sleep';
 
 export interface PokemonMove {
   name: string;
   type: string;
-  power: number;
-  patternSize: MovePatternSize;
+  power: number | null;
+  damageClass: string;
+  category: string | null;
+  maxHits: number;
   accuracy: number | null;
   statusEffect: StatusEffect | null;
   statusChance: number;
+}
+
+export interface MovePatternCell {
+  row: number;
+  column: number;
+}
+
+export interface MovePattern {
+  footprintSize: number;
+  hitCells: MovePatternCell[];
+  effectivePower: number | null;
+}
+
+export interface PendingMoveUnlock {
+  slot: number;
+  pokemonId: number;
+  moves: string[];
 }
 
 export interface Pokemon {
@@ -20,7 +38,9 @@ export interface Pokemon {
   stats: {
     hp: number;
     attack: number;
+    specialAttack: number;
     defense: number;
+    speed: number;
   };
   captureRate: number;
   spriteUrl: string | null;
@@ -33,6 +53,9 @@ export interface PartyMember {
   currentHp: number;
   maxHp: number;
   level: number;
+  moves: string[];
+  movesInitialized: boolean;
+  lastPhysicalDamageTaken: number;
 }
 
 export interface Inventory {
@@ -54,6 +77,9 @@ export interface PlayerProfile {
   opponentCells: boolean[];
   opponentStatuses: (StatusEffect | null)[];
   opponentStatusFresh: boolean[];
+  opponentMoves: string[];
+  opponentMovesInitialized: boolean;
+  pendingMoveUnlocks: PendingMoveUnlock[];
   encounterComplete: boolean;
   areaId: string;
   areaNumber: number;

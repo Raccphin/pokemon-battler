@@ -5,10 +5,11 @@ import { Image } from 'expo-image';
 import { ThemedText } from '@/components/themed-text';
 import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
 import { getMoveLabel, getMoveStatusChance } from '@/services/battle-rules';
-import type { PokemonMove } from '@/types/game';
+import type { MovePattern, PokemonMove } from '@/types/game';
 
 interface MoveCardProps {
   move: PokemonMove;
+  pattern: MovePattern;
   selected: boolean;
   disabled: boolean;
   onSelect: () => void;
@@ -18,6 +19,7 @@ interface MoveCardProps {
 
 export function MoveCard({
   move,
+  pattern,
   selected,
   disabled,
   onSelect,
@@ -53,31 +55,39 @@ export function MoveCard({
               {statusPresentation.label.toUpperCase()} · {Math.round(statusChance)}%
             </ThemedText>
           ) : null}
-          {Array.from({ length: move.patternSize }, (_, row) => (
+          {Array.from({ length: pattern.footprintSize }, (_, row) => (
             <View key={row} style={styles.patternRow}>
-              {Array.from({ length: move.patternSize }, (_, column) => (
-                <View
-                  key={column}
-                  style={[
-                    styles.patternCell,
-                    statusPresentation && { backgroundColor: statusPresentation.color },
-                  ]}>
-                  {statusPresentation ? (
+              {Array.from({ length: pattern.footprintSize }, (_, column) => {
+                const isHitCell = pattern.hitCells.some(
+                  (cell) => cell.row === row && cell.column === column
+                );
+                return (
+                  <View
+                    key={column}
+                    style={[
+                      styles.patternCell,
+                      isHitCell && styles.patternHitCell,
+                      isHitCell && statusPresentation
+                        ? { backgroundColor: statusPresentation.color }
+                        : null,
+                    ]}>
+                    {isHitCell && statusPresentation ? (
                     <Image
                       contentFit="contain"
                       source={statusPresentation.icon}
                       style={styles.patternStatusIcon}
                     />
                   ) : null}
-                </View>
-              ))}
+                  </View>
+                );
+              })}
             </View>
           ))}
         </View>
       ) : null}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${getMoveLabel(move.name)}, ${move.patternSize} by ${move.patternSize} pattern${statusPresentation ? `, may apply ${statusPresentation.label} at ${Math.round(statusChance)} percent` : ''}`}
+        accessibilityLabel={`${getMoveLabel(move.name)}, ${pattern.hitCells.length} hit cells in a ${pattern.footprintSize} by ${pattern.footprintSize} pattern${statusPresentation ? `, may apply ${statusPresentation.label} at ${Math.round(statusChance)} percent` : ''}`}
         disabled={disabled}
         onPress={onSelect}
         style={({ pressed }) => [
@@ -88,7 +98,8 @@ export function MoveCard({
         ]}>
         <ThemedText style={styles.name}>{getMoveLabel(move.name)}</ThemedText>
         <ThemedText style={styles.detail}>
-          {move.patternSize}×{move.patternSize} · {move.power} power
+          {pattern.hitCells.length} hits ·{' '}
+          {pattern.effectivePower === null ? 'fails until hit' : `${pattern.effectivePower} power`}
         </ThemedText>
         <ThemedText style={styles.type}>{move.type.toUpperCase()}</ThemedText>
       </Pressable>
@@ -170,11 +181,15 @@ const styles = StyleSheet.create({
     width: 16,
     height: 16,
     borderRadius: 3,
-    backgroundColor: '#efb34f',
+    backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: '#ffd787',
+    borderColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  patternHitCell: {
+    backgroundColor: '#efb34f',
+    borderColor: '#ffd787',
   },
   patternStatusIcon: {
     width: 12,

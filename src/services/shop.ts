@@ -12,6 +12,8 @@ export const SHOP_CONFIG = {
   } as const,
 } as const;
 
+export const MOVE_LEARNING_PRICE = 100;
+
 export function getShopItemLabel(item: ShopItemKey): string {
   switch (item) {
     case 'potion':
