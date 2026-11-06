@@ -29,6 +29,19 @@ export interface PendingMoveUnlock {
   moves: string[];
 }
 
+export interface EvolutionOption {
+  pokemonId: number;
+  name: string;
+  minimumLevel: number;
+}
+
+export interface PendingEvolution {
+  slot: number;
+  pokemonId: number;
+  options: EvolutionOption[];
+  prompted: boolean;
+}
+
 export interface Pokemon {
   id: number;
   name: string;
@@ -93,6 +106,7 @@ export interface PlayerProfile {
   opponentMoves: string[];
   opponentMovesInitialized: boolean;
   pendingMoveUnlocks: PendingMoveUnlock[];
+  pendingEvolutions: PendingEvolution[];
   encounterComplete: boolean;
   areaId: string;
   areaNumber: number;

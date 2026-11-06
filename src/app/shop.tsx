@@ -1,5 +1,5 @@
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,8 +15,12 @@ import {
   SHOP_CONFIG,
   getShopItemLabel,
 } from '@/services/shop';
-import { fetchPokemon, fetchPokemonShopMoves } from '@/services/pokeapi';
-import { getMoveLabel } from '@/services/battle-rules';
+import {
+  fetchPokemon,
+  fetchPokemonEvolutions,
+  fetchPokemonShopMoves,
+} from '@/services/pokeapi';
+import { getMoveLabel, getPlayerMaxHp } from '@/services/battle-rules';
 import { getMovePattern } from '@/services/move-patterns';
 import type { ShopItemKey } from '@/types/game';
 
@@ -29,14 +33,18 @@ export default function ShopScreen() {
     retry,
     purchaseItem,
     learnMove,
+    evolvePokemon,
     debugWipeSaveData,
   } = usePlayer();
+  const queryClient = useQueryClient();
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const [selectedMove, setSelectedMove] = useState<string | null>(null);
   const [replacedMove, setReplacedMove] = useState<string | null>(null);
   const [confirmMovePurchase, setConfirmMovePurchase] = useState(false);
   const [learning, setLearning] = useState(false);
   const [learningError, setLearningError] = useState<string | null>(null);
+  const [evolvingOption, setEvolvingOption] = useState<string | null>(null);
+  const [evolutionError, setEvolutionError] = useState<string | null>(null);
   const battle = useBattleController();
   const selectedPartyMember =
     state.status === 'ready'
@@ -49,6 +57,15 @@ export default function ShopScreen() {
         ? state.profile.party.map((member) => ({
             queryKey: ['pokemon', member.pokemonId, member.moves],
             queryFn: () => fetchPokemon(member.pokemonId, member.moves),
+          }))
+        : [],
+  });
+  const partyEvolutionQueries = useQueries({
+    queries:
+      state.status === 'ready'
+        ? state.profile.party.map((member) => ({
+            queryKey: ['pokemon-evolutions', member.pokemonId],
+            queryFn: () => fetchPokemonEvolutions(member.pokemonId),
           }))
         : [],
   });
@@ -88,6 +105,27 @@ export default function ShopScreen() {
     ? profile.party.findIndex((member) => member.slot === selectedMember.slot)
     : -1;
   const selectedPokemon = partyPokemonQueries[selectedMemberIndex]?.data;
+  const evolutionChoices = profile.party.flatMap((member, index) => {
+    const savedOffer = profile.pendingEvolutions.find(
+      (evolution) =>
+        evolution.slot === member.slot && evolution.pokemonId === member.pokemonId
+    );
+    const availableOptions =
+      partyEvolutionQueries[index]?.data?.filter(
+        (option) => option.minimumLevel <= member.level
+      ) ?? [];
+    const options = [
+      ...(savedOffer?.options ?? []),
+      ...availableOptions.filter(
+        (option) =>
+          !savedOffer?.options.some(
+            (savedOption) => savedOption.pokemonId === option.pokemonId
+          )
+      ),
+    ];
+    return options.length > 0 ? [{ member, options }] : [];
+  });
+  const evolutionDataError = partyEvolutionQueries.some((query) => query.error);
   const learnableMoves =
     learnsetQuery.data?.filter((move) => !selectedMember?.moves.includes(move.name)) ?? [];
   const previewMove = learnsetQuery.data?.find((move) => move.name === selectedMove);
@@ -130,6 +168,31 @@ export default function ShopScreen() {
       setLearningError(error instanceof Error ? error.message : 'The move could not be learned.');
     } finally {
       setLearning(false);
+    }
+  }
+
+  async function handleEvolution(slot: number, pokemonId: number, minimumLevel: number) {
+    const key = `${slot}:${pokemonId}`;
+    setEvolvingOption(key);
+    setEvolutionError(null);
+    try {
+      const pokemon = await queryClient.fetchQuery({
+        queryKey: ['pokemon', pokemonId, []],
+        queryFn: () => fetchPokemon(pokemonId),
+      });
+      await evolvePokemon(
+        slot,
+        pokemonId,
+        getPlayerMaxHp(pokemon.stats.hp),
+        minimumLevel,
+        'shop'
+      );
+    } catch (error) {
+      setEvolutionError(
+        error instanceof Error ? error.message : 'The Pokémon could not evolve.'
+      );
+    } finally {
+      setEvolvingOption(null);
     }
   }
 
@@ -425,6 +488,94 @@ export default function ShopScreen() {
           )}
         </View>
 
+        {evolutionChoices.length > 0 ||
+        evolutionDataError ||
+        partyEvolutionQueries.some((query) => query.isPending) ? (
+          <View style={styles.evolutionCard}>
+            <ThemedText style={styles.sectionTitle}>EVOLVE A POKÉMON</ThemedText>
+            <ThemedText style={styles.footerText}>
+              Evolve any eligible party Pokémon for free.
+            </ThemedText>
+            {partyEvolutionQueries.some((query) => query.isPending) ? (
+              <ThemedText style={styles.footerText}>Checking your party for available evolutions…</ThemedText>
+            ) : null}
+            {evolutionDataError ? (
+              <View style={styles.catalogError}>
+                <ThemedText style={styles.errorText}>
+                  Evolution choices could not be loaded.
+                </ThemedText>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() =>
+                    void Promise.all(
+                      partyEvolutionQueries.map((query) => query.refetch())
+                    )
+                  }
+                  style={styles.retryButton}>
+                  <ThemedText style={styles.retryText}>Retry</ThemedText>
+                </Pressable>
+              </View>
+            ) : null}
+            {evolutionChoices.map(({ member, options }) => {
+              const index = profile.party.findIndex(
+                (candidate) => candidate.slot === member.slot
+              );
+              const pokemon = partyPokemonQueries[index]?.data;
+              return (
+                <View key={`${member.slot}:${member.pokemonId}`} style={styles.evolutionParty}>
+                  <View style={styles.evolutionMember}>
+                    <PokemonSprite
+                      pokemon={pokemon ?? { id: member.pokemonId, spriteUrl: null }}
+                      size={38}
+                    />
+                    <View style={styles.pokemonChoiceTextGroup}>
+                      <ThemedText numberOfLines={1} style={styles.moveChoiceText}>
+                        {pokemon ? getMoveLabel(pokemon.name) : 'Loading Pokémon…'}
+                      </ThemedText>
+                      <ThemedText style={styles.pokemonLevel}>Lv. {member.level}</ThemedText>
+                    </View>
+                  </View>
+                  {options.map((option) => {
+                    const key = `${member.slot}:${option.pokemonId}`;
+                    return (
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={evolvingOption !== null}
+                        key={option.pokemonId}
+                        onPress={() =>
+                          void handleEvolution(
+                            member.slot,
+                            option.pokemonId,
+                            option.minimumLevel
+                          )
+                        }
+                        style={[
+                          styles.evolutionButton,
+                          evolvingOption === key && styles.disabled,
+                          evolvingOption !== null && evolvingOption !== key && styles.disabled,
+                        ]}>
+                        <ThemedText style={styles.teachButtonText}>
+                          {evolvingOption === key
+                            ? 'EVOLVING…'
+                            : `EVOLVE INTO ${getMoveLabel(option.name).toUpperCase()} · FREE`}
+                        </ThemedText>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              );
+            })}
+            {evolutionError ? (
+              <View style={styles.catalogError}>
+                <ThemedText style={styles.errorText}>{evolutionError}</ThemedText>
+                <ThemedText style={styles.footerText}>
+                  Tap an evolution again to retry.
+                </ThemedText>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         <Modal
           animationType="fade"
           transparent
@@ -636,6 +787,31 @@ const styles = StyleSheet.create({
     borderColor: '#ebd4a8',
     backgroundColor: '#fffaf2',
     gap: 10,
+  },
+  evolutionCard: {
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#ebd4a8',
+    backgroundColor: '#fffaf2',
+    gap: 10,
+  },
+  evolutionParty: {
+    paddingTop: 8,
+    gap: 8,
+  },
+  evolutionMember: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  evolutionButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: '#e65d43',
   },
   sectionTitle: {
     color: '#39424a',

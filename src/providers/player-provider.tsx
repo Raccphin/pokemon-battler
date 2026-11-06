@@ -29,6 +29,7 @@ import type {
   BallType,
   HealingItem,
   PartyMember,
+  PendingEvolution,
   PendingMoveUnlock,
   PlayerProfile,
   ShopItemKey,
@@ -64,6 +65,14 @@ interface PlayerContextValue {
     source: 'level-up' | 'shop'
   ) => Promise<void>;
   skipMoveUnlock: (slot: number, moveName: string) => Promise<void>;
+  evolvePokemon: (
+    slot: number,
+    targetPokemonId: number,
+    maxHp: number,
+    minimumLevel: number,
+    source: 'level-up' | 'shop'
+  ) => Promise<void>;
+  deferEvolution: (slot: number, pokemonId: number) => Promise<void>;
   applyItem: (item: HealingItem, slot: number) => Promise<void>;
   purchaseItem: (item: ShopItemKey) => Promise<void>;
   resolveCatch: (
@@ -80,6 +89,7 @@ interface PlayerContextValue {
     nextAreaId: string,
     opponentMoves: string[],
     newlyUnlockedMoves: PendingMoveUnlock[],
+    newlyUnlockedEvolutions: PendingEvolution[],
     specialBossId?: number,
     fromShop?: boolean
   ) => Promise<void>;
@@ -343,6 +353,79 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     [updateProfile]
   );
 
+  const evolvePokemon = useCallback(
+    (
+      slot: number,
+      targetPokemonId: number,
+      maxHp: number,
+      minimumLevel: number,
+      source: 'level-up' | 'shop'
+    ) =>
+      updateProfile((profile) => {
+        const member = profile.party.find((pokemon) => pokemon.slot === slot);
+        const offer = profile.pendingEvolutions.find(
+          (evolution) => evolution.slot === slot && evolution.pokemonId === member?.pokemonId
+        );
+        if (!member) throw new Error('That Pokémon is no longer in the party.');
+        const hasOfferedEvolution = offer?.options.some(
+          (option) => option.pokemonId === targetPokemonId
+        );
+        const eligibleInShop =
+          source === 'shop' &&
+          Number.isInteger(minimumLevel) &&
+          minimumLevel > 0 &&
+          member.level >= minimumLevel;
+        if (source === 'level-up' && !hasOfferedEvolution) {
+          throw new Error('That evolution is no longer available.');
+        }
+        if (source === 'shop' && !hasOfferedEvolution && !eligibleInShop) {
+          throw new Error('That evolution is not available for this Pokémon.');
+        }
+        if (!Number.isInteger(maxHp) || maxHp <= 0) {
+          throw new Error('The evolved Pokémon has invalid health data.');
+        }
+        const damageTaken = member.maxHp - member.currentHp;
+        return {
+          ...profile,
+          party: profile.party.map((pokemon) =>
+            pokemon.slot === slot
+              ? {
+                  ...pokemon,
+                  pokemonId: targetPokemonId,
+                  maxHp,
+                  currentHp: Math.max(0, Math.min(maxHp, maxHp - damageTaken)),
+                }
+              : pokemon
+          ),
+          pendingMoveUnlocks: profile.pendingMoveUnlocks.filter(
+            (unlock) => unlock.slot !== slot
+          ),
+          pendingEvolutions: profile.pendingEvolutions.filter(
+            (evolution) => evolution.slot !== slot
+          ),
+        };
+      }),
+    [updateProfile]
+  );
+
+  const deferEvolution = useCallback(
+    (slot: number, pokemonId: number) =>
+      updateProfile((profile) => {
+        const offer = profile.pendingEvolutions.find(
+          (evolution) =>
+            evolution.slot === slot && evolution.pokemonId === pokemonId
+        );
+        if (!offer) throw new Error('That evolution prompt is no longer available.');
+        return {
+          ...profile,
+          pendingEvolutions: profile.pendingEvolutions.map((evolution) =>
+            evolution === offer ? { ...evolution, prompted: true } : evolution
+          ),
+        };
+      }),
+    [updateProfile]
+  );
+
   const skipMoveUnlock = useCallback(
     (slot: number, moveName: string) =>
       updateProfile((profile) => ({
@@ -411,6 +494,9 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         return {
           ...profile,
           ...replacePartyMember(profile.party, profile.pendingCatch, slot),
+          pendingEvolutions: profile.pendingEvolutions.filter(
+            (evolution) => evolution.slot !== slot
+          ),
         };
       }),
     [updateProfile]
@@ -423,6 +509,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
       nextAreaId: string,
       opponentMoves: string[],
       newlyUnlockedMoves: PendingMoveUnlock[],
+      newlyUnlockedEvolutions: PendingEvolution[],
       specialBossId?: number,
       fromShop = false
     ) =>
@@ -477,9 +564,44 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
             }),
           }))
           .filter((unlock) => unlock.moves.length > 0);
+        const pendingEvolutions = [...profile.pendingEvolutions];
+        newlyUnlockedEvolutions.forEach((evolution) => {
+          const member = party.find((candidate) => candidate.slot === evolution.slot);
+          if (
+            !member ||
+            member.pokemonId !== evolution.pokemonId ||
+            evolution.options.length === 0
+          ) {
+            return;
+          }
+          const existingIndex = pendingEvolutions.findIndex(
+            (candidate) =>
+              candidate.slot === evolution.slot &&
+              candidate.pokemonId === evolution.pokemonId
+          );
+          if (existingIndex < 0) {
+            pendingEvolutions.push({ ...evolution, prompted: false });
+            return;
+          }
+          const existing = pendingEvolutions[existingIndex];
+          pendingEvolutions[existingIndex] = {
+            ...existing,
+            options: [
+              ...existing.options,
+              ...evolution.options.filter(
+                (option) =>
+                  !existing.options.some(
+                    (existingOption) => existingOption.pokemonId === option.pokemonId
+                  )
+              ),
+            ],
+            prompted: false,
+          };
+        });
         return {
           ...profile,
           pendingMoveUnlocks: [...profile.pendingMoveUnlocks, ...validUnlocks],
+          pendingEvolutions,
           opponentId,
           opponentLevel: next.opponentLevel,
           opponentIsAreaBoss: next.isAreaBoss,
@@ -603,6 +725,8 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         initializePartyMoves,
         learnMove,
         skipMoveUnlock,
+        evolvePokemon,
+        deferEvolution,
         applyItem,
         purchaseItem,
         resolveCatch,

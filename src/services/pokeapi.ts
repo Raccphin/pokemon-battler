@@ -1,4 +1,13 @@
-import type { Pokemon, PokemonMove, StatusEffect } from '@/types/game';
+import type {
+  EvolutionOption,
+  Pokemon,
+  PokemonMove,
+  StatusEffect,
+} from '@/types/game';
+import {
+  getEvolutionMinimumLevel,
+  type EvolutionDetails,
+} from '@/services/evolution-rules';
 
 interface PokemonApiResponse {
   id: number;
@@ -24,9 +33,21 @@ interface PokemonApiResponse {
 }
 
 interface SpeciesApiResponse {
+  name: string;
+  evolution_chain: { url: string };
   capture_rate: number;
   is_legendary: boolean;
   is_mythical: boolean;
+}
+
+interface EvolutionChainNode {
+  species: { name: string; url: string };
+  evolution_details: EvolutionDetails[];
+  evolves_to: EvolutionChainNode[];
+}
+
+interface EvolutionChainApiResponse {
+  chain: EvolutionChainNode;
 }
 
 interface TypeApiResponse {
@@ -53,6 +74,26 @@ export interface LevelUpMove extends PokemonMove {
 export interface ShopLearnableMove extends PokemonMove {
   learnedAtLevel: number;
   learnMethod: 'level-up' | 'machine';
+}
+
+function findEvolutionNode(
+  node: EvolutionChainNode,
+  speciesName: string
+): EvolutionChainNode | undefined {
+  if (node.species.name === speciesName) return node;
+  for (const child of node.evolves_to) {
+    const match = findEvolutionNode(child, speciesName);
+    if (match) return match;
+  }
+  return undefined;
+}
+
+function getPokemonIdFromSpeciesUrl(url: string): number {
+  const id = Number(url.match(/\/pokemon-species\/(\d+)\/?$/)?.[1]);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error(`PokéAPI returned an invalid evolution species URL: ${url}`);
+  }
+  return id;
 }
 
 const API_BASE_URL = 'https://pokeapi.co/api/v2';
@@ -217,6 +258,31 @@ export async function fetchPokemonLevelUpMoves(
       learnedAtLevel: latestMoves.get(move.name) ?? 0,
     }))
     .sort((left, right) => left.learnedAtLevel - right.learnedAtLevel || left.name.localeCompare(right.name));
+}
+
+export async function fetchPokemonEvolutions(
+  pokemonId: number
+): Promise<EvolutionOption[]> {
+  const pokemon = await fetchJson<PokemonApiResponse>(`${API_BASE_URL}/pokemon/${pokemonId}`);
+  const species = await fetchJson<SpeciesApiResponse>(pokemon.species.url);
+  const evolutionChain = await fetchJson<EvolutionChainApiResponse>(
+    species.evolution_chain.url
+  );
+  const node = findEvolutionNode(evolutionChain.chain, species.name);
+  if (!node) {
+    throw new Error(`PokéAPI evolution data is missing ${species.name}.`);
+  }
+
+  return node.evolves_to.map((evolution) => ({
+    pokemonId: getPokemonIdFromSpeciesUrl(evolution.species.url),
+    name: evolution.species.name,
+    minimumLevel:
+      evolution.evolution_details.length > 0
+        ? Math.min(
+            ...evolution.evolution_details.map(getEvolutionMinimumLevel)
+          )
+        : 30,
+  }));
 }
 
 export async function fetchPokemonShopMoves(
