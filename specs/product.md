@@ -9,7 +9,7 @@ The player fights a raid boss by removing blocks from its health grid. The playe
 ## Core experience
 
 1. See the player's Pokémon on the left and the raid boss on the right, facing each other.
-2. Select one of the player's equipped moves (up to four) to see its pattern in a tooltip above the move; drag it onto a grid cell or tap a target cell after selecting to attack.
+2. Select one of the player's equipped moves (up to four) to see its pattern in a tooltip above the move; the Pokémon's Attack or Special Attack sets the maximum footprint, while move power determines how many cells are hit, up to a 3×3 pattern. Drag it onto a grid cell or tap a target cell after selecting to attack.
 3. After a successful player attack, the boss uses one of its moves and damages the active Pokémon's regular health bar. The boss faints when all of its grid blocks are removed.
 4. Open the bag to heal or revive a selected party member, or use a Poké Ball to try to catch the boss.
 5. Switch the active Pokémon from the party screen and preview each party member's moves.

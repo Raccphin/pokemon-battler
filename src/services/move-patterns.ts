@@ -30,8 +30,6 @@ function getCenterOffset(size: number): number {
 }
 
 function getFootprintSize(stat: number): number {
-  if (stat >= 130) return 5;
-  if (stat >= 100) return 4;
   if (stat >= 70) return 3;
   if (stat >= 40) return 2;
   return 1;
@@ -146,17 +144,19 @@ export function getMovePattern(
   const levelAdjustedStat = getLevelAdjustedStat(stat, context.level);
   const footprintSize = statusMove ? 1 : getFootprintSize(levelAdjustedStat);
   const effectivePower = getMovePatternPower(move, context);
+  const targetCellCount = statusMove
+    ? 1
+    : effectivePower === null
+      ? 0
+      : Math.min(
+          footprintSize * footprintSize,
+          Math.max(1, Math.ceil((effectivePower * move.maxHits) / 10))
+        );
 
   if (effectivePower === null) {
     return { footprintSize, hitCells: [], effectivePower: null };
   }
 
-  const targetCellCount = statusMove
-    ? 1
-    : Math.min(
-        footprintSize * footprintSize,
-        Math.max(1, Math.ceil((effectivePower * move.maxHits) / 10))
-      );
   return {
     footprintSize,
     hitCells: getConnectedCells(move.name, footprintSize, targetCellCount),
