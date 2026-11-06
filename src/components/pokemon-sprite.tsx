@@ -8,9 +8,10 @@ import type { Pokemon } from '@/types/game';
 interface PokemonSpriteProps {
   pokemon: Pick<Pokemon, 'id' | 'spriteUrl'>;
   mirrored?: boolean;
+  size?: number;
 }
 
-export function PokemonSprite({ pokemon, mirrored = false }: PokemonSpriteProps) {
+export function PokemonSprite({ pokemon, mirrored = false, size = 112 }: PokemonSpriteProps) {
   const localSource = pokemonSpriteSources[pokemon.id];
   const [failedLocalId, setFailedLocalId] = useState<number | null>(null);
   const [failedRemoteId, setFailedRemoteId] = useState<number | null>(null);
@@ -23,14 +24,14 @@ export function PokemonSprite({ pokemon, mirrored = false }: PokemonSpriteProps)
 
   if (!source) {
     return (
-      <View style={styles.fallback}>
-        <Text style={styles.fallbackText}>✦</Text>
+      <View style={[styles.fallback, { width: size, height: size, borderRadius: size / 2 }]}>
+        <Text style={[styles.fallbackText, { fontSize: size * 0.36 }]}>✦</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { width: size, height: size }]}>
       <Image
         source={source}
         contentFit="contain"
@@ -59,16 +60,12 @@ const styles = StyleSheet.create({
     transform: [{ scaleX: -1 }],
   },
   fallback: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
     backgroundColor: '#f2d8af',
     alignItems: 'center',
     justifyContent: 'center',
   },
   fallbackText: {
     color: '#e65d43',
-    fontSize: 40,
     fontWeight: '800',
   },
 });

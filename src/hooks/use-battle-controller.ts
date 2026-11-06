@@ -1,11 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   AREA_PROGRESSION_CONFIG,
   chooseRandom,
   getAreaById,
   getNextEncounterProgress,
+  getOpponentProgressionLevel,
+  getPlayerProgressionLevel,
   getRandomArea,
 } from '@/services/area-progression';
 import {
@@ -16,16 +18,18 @@ import {
   getBossAttack,
   getBossGridDimensions,
   getMoveLabel,
-  getPatternCells,
   getPlayerMaxHp,
   resolveStatusTurn,
 } from '@/services/battle-rules';
+import { getMovePattern, getPatternCells } from '@/services/move-patterns';
 import { rumble } from '@/services/haptics';
 import {
   fetchPokemon,
   fetchPokemonClassification,
   fetchPokemonIdsForTypes,
+  fetchPokemonLevelUpMoves,
 } from '@/services/pokeapi';
+import { chooseOpponentMoveNames, getInitialMoveNames } from '@/services/move-learning';
 import { usePlayer } from '@/providers/player-provider';
 import type { BallType, PokemonMove } from '@/types/game';
 
@@ -60,6 +64,10 @@ export function useBattleController() {
     debugAdvanceToBoss,
     debugHealParty,
     debugWipeSaveData: resetSaveData,
+    initializePartyMoves,
+    initializeOpponentMoves,
+    learnMove,
+    skipMoveUnlock,
   } = usePlayer();
   const profile = state.status === 'ready' ? state.profile : null;
   const activeMember = profile?.party.find((member) => member.slot === profile.activeSlot);
@@ -67,23 +75,71 @@ export function useBattleController() {
   const bossId = profile?.opponentId;
 
   const playerQuery = useQuery({
-    queryKey: ['pokemon', activePokemonId],
+    queryKey: ['pokemon', activePokemonId, activeMember?.moves],
     queryFn: () => {
       if (!activePokemonId) throw new Error('No active Pokémon is selected.');
-      return fetchPokemon(activePokemonId);
+      return fetchPokemon(activePokemonId, activeMember?.moves ?? []);
     },
-    enabled: activePokemonId !== undefined,
+    enabled: activePokemonId !== undefined && Boolean(activeMember?.movesInitialized),
   });
   const bossQuery = useQuery({
-    queryKey: ['pokemon', bossId],
+    queryKey: ['pokemon', bossId, profile?.opponentMoves],
     queryFn: () => {
       if (!bossId) throw new Error('No raid boss is selected.');
-      return fetchPokemon(bossId);
+      return fetchPokemon(bossId, profile?.opponentMoves ?? []);
+    },
+    enabled: bossId !== undefined && Boolean(profile?.opponentMovesInitialized),
+  });
+  const playerLearnsetQuery = useQuery({
+    queryKey: ['pokemon-level-up-moves', activePokemonId, activeMember?.level],
+    queryFn: () => {
+      if (!activePokemonId || !activeMember) throw new Error('No active Pokémon is selected.');
+      return fetchPokemonLevelUpMoves(activePokemonId, activeMember.level);
+    },
+    enabled: activePokemonId !== undefined && !activeMember?.movesInitialized,
+  });
+  const bossLearnsetQuery = useQuery({
+    queryKey: ['pokemon-level-up-moves', bossId, profile?.opponentLevel],
+    queryFn: () => {
+      if (!bossId || !profile) throw new Error('No raid boss is selected.');
+      return fetchPokemonLevelUpMoves(bossId, profile.opponentLevel);
     },
     enabled: bossId !== undefined,
   });
+  const initializingOpponent = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      activeMember &&
+      !activeMember.movesInitialized &&
+      playerLearnsetQuery.data
+    ) {
+      void initializePartyMoves(
+        activeMember.slot,
+        getInitialMoveNames(playerLearnsetQuery.data)
+      ).catch(() => undefined);
+    }
+  }, [activeMember, initializePartyMoves, playerLearnsetQuery.data]);
+  useEffect(() => {
+    if (!profile || profile.opponentMovesInitialized || !bossLearnsetQuery.data) return;
+    const key = `${profile.opponentId}:${profile.opponentLevel}`;
+    if (initializingOpponent.current === key) return;
+    initializingOpponent.current = key;
+    void initializeOpponentMoves(
+      chooseOpponentMoveNames(bossLearnsetQuery.data)
+    )
+      .then(() => {
+        if (initializingOpponent.current === key) initializingOpponent.current = null;
+      })
+      .catch((error: unknown) => {
+        initializingOpponent.current = null;
+        setMessage(error instanceof Error ? error.message : 'Opponent moves could not be saved.');
+      });
+  }, [
+    bossLearnsetQuery.data,
+    initializeOpponentMoves,
+    profile,
+  ]);
   const area = profile ? getAreaById(profile.areaId) : null;
-  const [round, setRound] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('Choose a move to view its attack pattern.');
   const [catchAnimation, setCatchAnimation] = useState<{ positions: number[] } | null>(null);
@@ -146,9 +202,34 @@ export function useBattleController() {
       : [];
   const selectedMove: PokemonMove | undefined =
     playerPokemon?.moves[selectedMoveIndex ?? -1];
-  const remoteLoading = playerQuery.isPending || bossQuery.isPending;
-  const remoteError = playerQuery.error ?? bossQuery.error;
-  const remoteReady = Boolean(playerPokemon && bossPokemon && dimensions);
+  const movePatternContext = {
+    level: activeMember?.level ?? 1,
+    currentHp: activeMember?.currentHp ?? 0,
+    maxHp: activeMember?.maxHp ?? 1,
+    lastPhysicalDamageTaken: activeMember?.lastPhysicalDamageTaken ?? 0,
+  };
+  const playerMovePatterns =
+    playerPokemon?.moves.map((move) =>
+      getMovePattern(move, playerPokemon.stats, movePatternContext)
+    ) ?? [];
+  const selectedPattern = playerMovePatterns[selectedMoveIndex ?? -1];
+  const remoteLoading =
+    playerQuery.isPending ||
+    bossQuery.isPending ||
+    bossLearnsetQuery.isPending ||
+    (!activeMember?.movesInitialized && playerLearnsetQuery.isPending);
+  const remoteError =
+    playerQuery.error ??
+    bossQuery.error ??
+    bossLearnsetQuery.error ??
+    (!activeMember?.movesInitialized ? playerLearnsetQuery.error : null);
+  const remoteReady = Boolean(
+    playerPokemon &&
+      bossPokemon &&
+      dimensions &&
+      activeMember?.movesInitialized &&
+      profile?.opponentMovesInitialized
+  );
   const bossRemaining = cells.filter(Boolean).length;
   const bossDefeated = Boolean(profile?.encounterComplete && bossRemaining === 0);
   const bossCaught = Boolean(profile?.encounterComplete && bossRemaining > 0);
@@ -160,6 +241,7 @@ export function useBattleController() {
       profile.runStatus === 'active' &&
       !profile.encounterComplete &&
       !profile.pendingCatch &&
+      profile.pendingMoveUnlocks.length === 0 &&
       currentHp > 0 &&
       bossRemaining > 0 &&
       cells.length === totalCells &&
@@ -167,10 +249,11 @@ export function useBattleController() {
       statusFresh.length === totalCells
   );
   async function performMove(move: PokemonMove, row: number, column: number) {
-    if (!canBattle || !dimensions || !profile || !bossPokemon) return;
-    const hitCells = getPatternCells(row, column, move.patternSize, dimensions);
+    if (!canBattle || !dimensions || !profile || !bossPokemon || !playerPokemon) return;
+    const pattern = getMovePattern(move, playerPokemon.stats, movePatternContext);
+    const hitCells = getPatternCells(row, column, pattern, dimensions);
     const hitAnything = hitCells.some((index) => cells[index]);
-    if (!hitAnything) {
+    if (pattern.effectivePower !== null && !hitAnything) {
       setMessage('That part of the grid is already clear.');
       return;
     }
@@ -180,7 +263,9 @@ export function useBattleController() {
     try {
       const moveHits = doesMoveHit(move);
       const attackedGrid = moveHits
-        ? applyMovePattern(cells, statuses, statusFresh, hitCells, move)
+        ? pattern.effectivePower !== null
+          ? applyMovePattern(cells, statuses, statusFresh, hitCells, move)
+          : { cells, statuses, statusFresh }
         : { cells, statuses, statusFresh };
       const statusTurn = attackedGrid.cells.some(Boolean)
         ? resolveStatusTurn(
@@ -201,20 +286,21 @@ export function useBattleController() {
         attackedGrid.cells.filter(Boolean).length - nextCells.filter(Boolean).length;
       const clearedByMove =
         cells.filter(Boolean).length - attackedGrid.cells.filter(Boolean).length;
-      const moveMessage = moveHits
-        ? `${getMoveLabel(move.name)} cleared ${clearedByMove} block(s).`
-        : `${getMoveLabel(move.name)} missed.`;
+      const moveMessage = !moveHits
+        ? `${getMoveLabel(move.name)} missed.`
+        : pattern.effectivePower === null
+          ? `${getMoveLabel(move.name)} failed because no physical hit has been recorded.`
+          : `${getMoveLabel(move.name)} cleared ${clearedByMove} block(s).`;
       await updateOpponentGrid(
         nextCells,
         statusTurn.statuses,
         statusTurn.statusFresh,
         defeated
       );
-      rumble();
+      if (clearedByMove + clearedByStatuses > 0) rumble();
       if (defeated) {
         setMessage(`${capitalize(bossPokemon.name)} fainted! The raid is complete.`);
       } else if (statusTurn.opponentSkipped) {
-        setRound((turn) => turn + 1);
         const statusTiles = statusTurn.statuses.filter(
           (status, index) =>
             statusTurn.cells[index] &&
@@ -228,15 +314,35 @@ export function useBattleController() {
           `${moveMessage}${statusMessage} ${capitalize(bossPokemon.name)} skipped its turn because of ${statusTiles} stalling status tile(s).`
         );
       } else {
-        const counterattack = getBossAttack(bossPokemon, round, profile.opponentIsAreaBoss);
-        await damageActivePokemon(counterattack.damage);
-        rumble();
-        setRound((turn) => turn + 1);
-        setMessage(
-          `${moveMessage} ` +
-            `${clearedByStatuses > 0 ? `${clearedByStatuses} additional block(s) were cleared by status effects. ` : ''}` +
-            `${capitalize(bossPokemon.name)} used ${getMoveLabel(counterattack.move.name)} for ${counterattack.damage} damage.`
+        const counterattack = getBossAttack(
+          bossPokemon,
+          Math.random,
+          profile.opponentIsAreaBoss,
+          bossRemaining,
+          totalCells,
+          profile.opponentLevel
         );
+        if (!counterattack.move) {
+          setMessage(`${moveMessage} ${capitalize(bossPokemon.name)} has no move available at this level.`);
+        } else if (!doesMoveHit(counterattack.move)) {
+          setMessage(
+            `${moveMessage} ${capitalize(bossPokemon.name)} used ${getMoveLabel(counterattack.move.name)}, but it missed.`
+          );
+        } else {
+          if (counterattack.damage > 0) {
+            await damageActivePokemon(
+              counterattack.damage,
+              counterattack.move.damageClass === 'physical'
+            );
+            rumble();
+          }
+          setMessage(
+            `${moveMessage} ` +
+              `${clearedByStatuses > 0 ? `${clearedByStatuses} additional block(s) were cleared by status effects. ` : ''}` +
+              `${capitalize(bossPokemon.name)} used ${getMoveLabel(counterattack.move.name)}` +
+              `${counterattack.damage > 0 ? ` for ${counterattack.damage} damage.` : ', but it failed.'}`
+          );
+        }
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The attack could not be saved.');
@@ -282,7 +388,8 @@ export function useBattleController() {
         ball,
         result.success,
         bossPokemon.id,
-        getPlayerMaxHp(bossPokemon.stats.hp)
+        getPlayerMaxHp(bossPokemon.stats.hp),
+        getInitialMoveNames(bossLearnsetQuery.data ?? [])
       );
       setCatchAnimation({ positions: randomCells(ballDetails.count, totalCells) });
       setMessage(`${ballDetails.label} is wobbling…`);
@@ -324,10 +431,27 @@ export function useBattleController() {
     if (!profile || !area || !profile.encounterComplete) return false;
     try {
       setBusy(true);
+      await Promise.all(
+        profile.party.map(async (member) => {
+          if (member.movesInitialized) return;
+          const learnset = await queryClient.fetchQuery({
+            queryKey: ['pokemon-level-up-moves', member.pokemonId, member.level],
+            queryFn: () => fetchPokemonLevelUpMoves(member.pokemonId, member.level),
+          });
+          await initializePartyMoves(
+            member.slot,
+            getInitialMoveNames(learnset)
+          );
+        })
+      );
       const areaChanges =
         profile.encounterIndex + 1 >= AREA_PROGRESSION_CONFIG.encountersPerArea;
       const nextArea = areaChanges ? getRandomArea() : area;
       const next = getNextEncounterProgress(profile, nextArea.id);
+      const nextPlayerLevel = getPlayerProgressionLevel(
+        next.areaNumber,
+        next.encounterIndex
+      );
       const { opponentId, specialBossId } = next.isAreaBoss
         ? await chooseAreaBoss(nextArea.id, profile.usedSpecialBossIds)
         : {
@@ -341,11 +465,46 @@ export function useBattleController() {
       if (opponentId === undefined) {
         throw new Error(`No eligible Pokémon were found for the ${nextArea.name}.`);
       }
-      await advanceEncounter(opponentId, next.isAreaBoss, nextArea.id, specialBossId, fromShop);
+      const [opponentLearnset, newlyUnlockedMovesByMember] = await Promise.all([
+        queryClient.fetchQuery({
+          queryKey: ['pokemon-level-up-moves', opponentId, next.opponentLevel],
+          queryFn: () => fetchPokemonLevelUpMoves(opponentId, next.opponentLevel),
+        }),
+        Promise.all(
+          profile.party.map(async (member) => {
+            if (nextPlayerLevel <= member.level) return null;
+            const learnset = await queryClient.fetchQuery({
+              queryKey: ['pokemon-level-up-moves', member.pokemonId, nextPlayerLevel],
+              queryFn: () =>
+                fetchPokemonLevelUpMoves(member.pokemonId, nextPlayerLevel),
+            });
+            const moves = learnset
+              .filter(
+                (move) =>
+                  move.learnedAtLevel > member.level &&
+                  move.learnedAtLevel <= nextPlayerLevel
+              )
+              .map((move) => move.name);
+            return moves.length > 0
+              ? { slot: member.slot, pokemonId: member.pokemonId, moves }
+              : null;
+          })
+        ),
+      ]);
+      await advanceEncounter(
+        opponentId,
+        next.isAreaBoss,
+        nextArea.id,
+        chooseOpponentMoveNames(opponentLearnset),
+        newlyUnlockedMovesByMember.filter(
+          (unlock): unlock is NonNullable<typeof unlock> => unlock !== null
+        ),
+        specialBossId,
+        fromShop
+      );
       setMessage(
         `${nextArea.name} · Encounter ${next.encounterIndex + 1} of ${AREA_PROGRESSION_CONFIG.encountersPerArea}.`
       );
-      setRound(0);
       return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The next encounter could not be loaded.');
@@ -426,8 +585,19 @@ export function useBattleController() {
       if (opponentId === undefined) {
         throw new Error(`No eligible boss Pokémon were found for the ${area.name}.`);
       }
-      await debugAdvanceToBoss(opponentId, specialBossId);
-      setRound(0);
+      const bossLevel = getOpponentProgressionLevel(
+        profile.areaNumber,
+        AREA_PROGRESSION_CONFIG.encountersPerArea - 1
+      );
+      const bossLearnset = await queryClient.fetchQuery({
+        queryKey: ['pokemon-level-up-moves', opponentId, bossLevel],
+        queryFn: () => fetchPokemonLevelUpMoves(opponentId, bossLevel),
+      });
+      await debugAdvanceToBoss(
+        opponentId,
+        chooseOpponentMoveNames(bossLearnset),
+        specialBossId
+      );
       setMessage(`Skipped to the ${area.name} area boss (debug).`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not load the area boss.');
@@ -468,6 +638,8 @@ export function useBattleController() {
     void Promise.all([
       playerQuery.refetch(),
       bossQuery.refetch(),
+      ...(!activeMember?.movesInitialized ? [playerLearnsetQuery.refetch()] : []),
+      bossLearnsetQuery.refetch(),
     ]);
   }
 
@@ -484,6 +656,7 @@ export function useBattleController() {
     profile,
     activeMember,
     playerPokemon,
+    playerMovePatterns,
     bossPokemon,
     dimensions,
     area,
@@ -498,6 +671,9 @@ export function useBattleController() {
     canBattle,
     selectedMoveIndex,
     selectedMove,
+    selectedPattern,
+    learnMove,
+    skipMoveUnlock,
     busy,
     message,
     operationError,

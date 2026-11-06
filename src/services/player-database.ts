@@ -5,6 +5,7 @@ import type {
   HealingItem,
   Inventory,
   PartyMember,
+  PendingMoveUnlock,
   PlayerProfile,
   RunStatus,
   RunSummary,
@@ -22,6 +23,9 @@ interface SaveRow {
   opponent_cells: string;
   opponent_statuses: string;
   opponent_status_fresh: string;
+  opponent_moves: string;
+  opponent_moves_initialized: number;
+  pending_move_unlocks: string;
   encounter_complete: number;
   area_id: string;
   area_number: number;
@@ -45,6 +49,9 @@ interface PartyRow {
   current_hp: number;
   max_hp: number;
   level: number;
+  moves: string;
+  moves_initialized: number;
+  last_physical_damage_taken: number;
 }
 
 function parseCells(value: string): boolean[] {
@@ -140,16 +147,37 @@ function isNonNegativeInteger(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 0;
 }
 
-function isPartyMember(value: unknown): value is PartyMember {
-  return (
-    isRecord(value) &&
-    isNonNegativeInteger(value.slot) &&
-    isPositiveInteger(value.pokemonId) &&
-    isNonNegativeInteger(value.currentHp) &&
-    isPositiveInteger(value.maxHp) &&
-    value.currentHp <= value.maxHp &&
-    isPositiveInteger(value.level)
-  );
+function parsePartyMember(value: unknown): PartyMember | null {
+  if (
+    !isRecord(value) ||
+    !isNonNegativeInteger(value.slot) ||
+    !isPositiveInteger(value.pokemonId) ||
+    !isNonNegativeInteger(value.currentHp) ||
+    !isPositiveInteger(value.maxHp) ||
+    value.currentHp > value.maxHp ||
+    !isPositiveInteger(value.level) ||
+    (value.moves !== undefined &&
+      (!Array.isArray(value.moves) ||
+        !value.moves.every((move) => typeof move === "string"))) ||
+    (value.movesInitialized !== undefined &&
+      typeof value.movesInitialized !== "boolean") ||
+    (value.lastPhysicalDamageTaken !== undefined &&
+      !isNonNegativeInteger(value.lastPhysicalDamageTaken))
+  ) {
+    return null;
+  }
+  return {
+    slot: value.slot,
+    pokemonId: value.pokemonId,
+    currentHp: value.currentHp,
+    maxHp: value.maxHp,
+    level: value.level,
+    moves: Array.isArray(value.moves) ? [...new Set(value.moves)] : [],
+    movesInitialized: value.movesInitialized === true,
+    lastPhysicalDamageTaken: isNonNegativeInteger(value.lastPhysicalDamageTaken)
+      ? value.lastPhysicalDamageTaken
+      : 0,
+  };
 }
 
 function parseRunStatus(value: string): RunStatus {
@@ -178,10 +206,13 @@ function parseRunSummary(value: string): RunSummary | null {
     !isNonNegativeInteger(encounterIndex) ||
     !isPositiveInteger(opponentLevel) ||
     typeof opponentIsAreaBoss !== "boolean" ||
-    !Array.isArray(party) ||
-    !party.every(isPartyMember)
+    !Array.isArray(party)
   ) {
     throw new Error("The saved game-over summary is invalid. The save could not be loaded.");
+  }
+  const parsedParty = party.map(parsePartyMember);
+  if (parsedParty.some((member) => member === null)) {
+    throw new Error("The saved game-over team is invalid. The save could not be loaded.");
   }
   return {
     areaId,
@@ -189,7 +220,7 @@ function parseRunSummary(value: string): RunSummary | null {
     encounterIndex,
     opponentLevel,
     opponentIsAreaBoss,
-    party: party.map((member) => ({ ...member })),
+    party: parsedParty.filter((member): member is PartyMember => member !== null),
   };
 }
 
@@ -199,13 +230,18 @@ function parsePendingCatch(value: string): Omit<PartyMember, "slot"> | null {
   if (!isRecord(parsed)) {
     throw new Error("The saved pending catch is invalid. The save could not be loaded.");
   }
-  const { pokemonId, currentHp, maxHp, level } = parsed;
+  const { pokemonId, currentHp, maxHp, level, moves, movesInitialized, lastPhysicalDamageTaken } = parsed;
   if (
     !isPositiveInteger(pokemonId) ||
     !isNonNegativeInteger(currentHp) ||
     !isPositiveInteger(maxHp) ||
     currentHp > maxHp ||
-    !isPositiveInteger(level)
+    !isPositiveInteger(level) ||
+    (moves !== undefined &&
+      (!Array.isArray(moves) || !moves.every((move) => typeof move === "string"))) ||
+    (movesInitialized !== undefined && typeof movesInitialized !== "boolean") ||
+    (lastPhysicalDamageTaken !== undefined &&
+      !isNonNegativeInteger(lastPhysicalDamageTaken))
   ) {
     throw new Error("The saved pending catch is invalid. The save could not be loaded.");
   }
@@ -214,7 +250,43 @@ function parsePendingCatch(value: string): Omit<PartyMember, "slot"> | null {
     currentHp,
     maxHp,
     level,
+    moves: Array.isArray(moves) ? [...new Set(moves)] : [],
+    movesInitialized: movesInitialized === true,
+    lastPhysicalDamageTaken: isNonNegativeInteger(lastPhysicalDamageTaken)
+      ? lastPhysicalDamageTaken
+      : 0,
   };
+}
+
+function parseMoveNames(value: string): string[] {
+  const parsed: unknown = JSON.parse(value);
+  if (Array.isArray(parsed) && parsed.every((move) => typeof move === "string")) {
+    return [...new Set(parsed)];
+  }
+  throw new Error("The saved Pokémon moves are invalid. The save could not be loaded.");
+}
+
+function isPendingMoveUnlock(value: unknown): value is PendingMoveUnlock {
+  if (!isRecord(value)) return false;
+  const unlock = value;
+  return (
+    Number.isInteger(unlock.slot) &&
+    Number.isInteger(unlock.pokemonId) &&
+    Array.isArray(unlock.moves) &&
+    unlock.moves.every((move: unknown) => typeof move === "string")
+  );
+}
+
+function parsePendingMoveUnlocks(value: string): PlayerProfile["pendingMoveUnlocks"] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed) || !parsed.every(isPendingMoveUnlock)) {
+    throw new Error("The saved move unlocks are invalid. The save could not be loaded.");
+  }
+  return parsed.map((entry) => ({
+    slot: entry.slot,
+    pokemonId: entry.pokemonId,
+    moves: [...new Set(entry.moves)],
+  }));
 }
 
 function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
@@ -239,6 +311,9 @@ function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
       save.opponent_status_fresh,
       opponentCells.length,
     ),
+    opponentMoves: parseMoveNames(save.opponent_moves),
+    opponentMovesInitialized: Boolean(save.opponent_moves_initialized),
+    pendingMoveUnlocks: parsePendingMoveUnlocks(save.pending_move_unlocks),
     encounterComplete: Boolean(save.encounter_complete),
     areaId: save.area_id,
     areaNumber: save.area_number,
@@ -259,6 +334,9 @@ function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
       currentHp: member.current_hp,
       maxHp: member.max_hp,
       level: member.level,
+      moves: parseMoveNames(member.moves),
+      movesInitialized: Boolean(member.moves_initialized),
+      lastPhysicalDamageTaken: member.last_physical_damage_taken,
     })),
     runStatus,
     runSummary,
@@ -279,6 +357,9 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
       opponent_cells TEXT NOT NULL,
       opponent_statuses TEXT NOT NULL DEFAULT '[]',
       opponent_status_fresh TEXT NOT NULL DEFAULT '[]',
+      opponent_moves TEXT NOT NULL DEFAULT '[]',
+      opponent_moves_initialized INTEGER NOT NULL DEFAULT 0,
+      pending_move_unlocks TEXT NOT NULL DEFAULT '[]',
       encounter_complete INTEGER NOT NULL,
       area_id TEXT NOT NULL DEFAULT 'forest',
       area_number INTEGER NOT NULL DEFAULT 1,
@@ -300,7 +381,10 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
       pokemon_id INTEGER NOT NULL,
       current_hp INTEGER NOT NULL,
       max_hp INTEGER NOT NULL,
-      level INTEGER NOT NULL
+      level INTEGER NOT NULL,
+      moves TEXT NOT NULL DEFAULT '[]',
+      moves_initialized INTEGER NOT NULL DEFAULT 0,
+      last_physical_damage_taken INTEGER NOT NULL DEFAULT 0
     );
   `);
   const columns = await database.getAllAsync<{ name: string }>(
@@ -313,6 +397,9 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
     ["opponent_is_area_boss", "INTEGER NOT NULL DEFAULT 0"],
     ["opponent_statuses", "TEXT NOT NULL DEFAULT '[]'"],
     ["opponent_status_fresh", "TEXT NOT NULL DEFAULT '[]'"],
+    ["opponent_moves", "TEXT NOT NULL DEFAULT '[]'"],
+    ["opponent_moves_initialized", "INTEGER NOT NULL DEFAULT 0"],
+    ["pending_move_unlocks", "TEXT NOT NULL DEFAULT '[]'"],
     ["area_id", "TEXT NOT NULL DEFAULT 'forest'"],
     ["area_number", "INTEGER NOT NULL DEFAULT 1"],
     ["encounter_index", "INTEGER NOT NULL DEFAULT 0"],
@@ -330,14 +417,31 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
       );
     }
   }
+  const partyColumns = await database.getAllAsync<{ name: string }>(
+    "PRAGMA table_info(party_member)",
+  );
+  const partyColumnNames = new Set(partyColumns.map((column) => column.name));
+  const partyMigrations: [string, string][] = [
+    ["moves", "TEXT NOT NULL DEFAULT '[]'"],
+    ["moves_initialized", "INTEGER NOT NULL DEFAULT 0"],
+    ["last_physical_damage_taken", "INTEGER NOT NULL DEFAULT 0"],
+  ];
+  for (const [name, definition] of partyMigrations) {
+    if (!partyColumnNames.has(name)) {
+      await database.execAsync(
+        `ALTER TABLE party_member ADD COLUMN ${name} ${definition}`,
+      );
+    }
+  }
   const initialArea = getRandomArea();
   await database.runAsync(
     `INSERT OR IGNORE INTO player_save
       (id, starter_selected, active_slot, opponent_id, opponent_level, opponent_is_area_boss, opponent_cells,
-       opponent_statuses, opponent_status_fresh, encounter_complete, area_id, area_number,
+       opponent_statuses, opponent_status_fresh, opponent_moves, opponent_moves_initialized,
+       pending_move_unlocks, encounter_complete, area_id, area_number,
        encounter_index, used_special_boss_ids, money, shop_progress, poke_balls, great_balls,
        ultra_balls, potions, revives)
-      VALUES (1, 0, 0, ?, 1, 0, '[]', '[]', '[]', 0, ?, 1, 0, '[]', 0, 0, 5, 2, 1, 3, 1)`,
+      VALUES (1, 0, 0, ?, 1, 0, '[]', '[]', '[]', '[]', 0, '[]', 0, ?, 1, 0, '[]', 0, 0, 5, 2, 1, 3, 1)`,
     initialArea.startingPokemonId,
     initialArea.id,
   );
@@ -376,6 +480,7 @@ export async function persistPlayerProfile(
     await database.runAsync(
       `UPDATE player_save SET active_slot = ?, opponent_id = ?, opponent_level = ?,
        starter_selected = ?, opponent_is_area_boss = ?, opponent_cells = ?, opponent_statuses = ?, opponent_status_fresh = ?,
+       opponent_moves = ?, opponent_moves_initialized = ?, pending_move_unlocks = ?,
        encounter_complete = ?, area_id = ?,
        area_number = ?, encounter_index = ?, used_special_boss_ids = ?, money = ?,
        shop_progress = ?, run_status = ?, run_summary = ?, pending_catch = ?,
@@ -388,6 +493,9 @@ export async function persistPlayerProfile(
       JSON.stringify(profile.opponentCells),
       JSON.stringify(profile.opponentStatuses),
       JSON.stringify(profile.opponentStatusFresh),
+      JSON.stringify(profile.opponentMoves),
+      Number(profile.opponentMovesInitialized),
+      JSON.stringify(profile.pendingMoveUnlocks),
       Number(profile.encounterComplete),
       profile.areaId,
       profile.areaNumber,
@@ -407,13 +515,17 @@ export async function persistPlayerProfile(
     await database.runAsync("DELETE FROM party_member");
     for (const member of profile.party) {
       await database.runAsync(
-        `INSERT INTO party_member (slot, pokemon_id, current_hp, max_hp, level)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO party_member
+         (slot, pokemon_id, current_hp, max_hp, level, moves, moves_initialized, last_physical_damage_taken)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         member.slot,
         member.pokemonId,
         member.currentHp,
         member.maxHp,
         member.level,
+        JSON.stringify(member.moves),
+        Number(member.movesInitialized),
+        member.lastPhysicalDamageTaken,
       );
     }
   });
@@ -428,6 +540,7 @@ export async function resetPlayerSave(
       `UPDATE player_save SET starter_selected = 0, active_slot = 0, opponent_id = ?,
        opponent_level = 1, opponent_is_area_boss = 0, opponent_cells = '[]',
        opponent_statuses = '[]', opponent_status_fresh = '[]',
+       opponent_moves = '[]', opponent_moves_initialized = 0, pending_move_unlocks = '[]',
        encounter_complete = 0, area_id = ?, area_number = 1, encounter_index = 0,
        used_special_boss_ids = '[]', money = 0, shop_progress = 0,
        run_status = 'active', run_summary = 'null', pending_catch = 'null',

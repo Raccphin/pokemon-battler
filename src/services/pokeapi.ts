@@ -13,7 +13,14 @@ interface PokemonApiResponse {
       };
     };
   };
-  moves: { move: { name: string; url: string } }[];
+  moves: {
+    move: { name: string; url: string };
+    version_group_details: {
+      level_learned_at: number;
+      move_learn_method: { name: string };
+      version_group: { url: string };
+    }[];
+  }[];
 }
 
 interface SpeciesApiResponse {
@@ -26,26 +33,45 @@ interface TypeApiResponse {
   pokemon: { pokemon: { url: string } }[];
 }
 
-interface PokemonTypesApiResponse {
-  id: number;
-  name: string;
-  types: { type: { name: string } }[];
-  stats: PokemonApiResponse['stats'];
-  sprites: PokemonApiResponse['sprites'];
-}
-
 interface MoveApiResponse {
   accuracy: number | null;
   damage_class: { name: string };
   meta: {
     ailment: { name: string } | null;
     ailment_chance: number;
+    category: { name: string } | null;
+    max_hits: number | null;
   } | null;
   power: number | null;
   type: { name: string };
 }
 
+export interface LevelUpMove extends PokemonMove {
+  learnedAtLevel: number;
+}
+
+export interface ShopLearnableMove extends PokemonMove {
+  learnedAtLevel: number;
+  learnMethod: 'level-up' | 'machine';
+}
+
 const API_BASE_URL = 'https://pokeapi.co/api/v2';
+// PokeAPI also assigns later IDs to side games and retro releases.
+const MAINLINE_VERSION_GROUP_IDS = new Set([
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+  25, 26, 27,
+]);
+const NULL_POWER_MOVE_OVERRIDES = new Set([
+  'counter',
+  'flail',
+  'night-shade',
+  'sonic-boom',
+  'seismic-toss',
+  'dragon-rage',
+  'super-fang',
+  'psywave',
+  'gyro-ball',
+]);
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -55,18 +81,69 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(values[index]);
+      }
+    })
+  );
+  return results;
+}
+
+function getLatestMainlineVersionGroupId(
+  pokemon: PokemonApiResponse,
+  learnMethods: readonly string[]
+): number | undefined {
+  const versionGroupIds = pokemon.moves.flatMap(({ version_group_details }) =>
+    version_group_details.flatMap((details) => {
+      if (!learnMethods.includes(details.move_learn_method.name)) return [];
+      const versionGroupId = Number(details.version_group.url.match(/\/(\d+)\/?$/)?.[1]);
+      return MAINLINE_VERSION_GROUP_IDS.has(versionGroupId) ? [versionGroupId] : [];
+    })
+  );
+  return versionGroupIds.length > 0 ? Math.max(...versionGroupIds) : undefined;
+}
+
+function getMoveMethodRecords(
+  pokemon: PokemonApiResponse,
+  learnMethod: 'level-up' | 'machine',
+  versionGroupId: number
+): Map<string, number> {
+  const moves = new Map<string, number>();
+  for (const entry of pokemon.moves) {
+    for (const details of entry.version_group_details) {
+      const id = Number(details.version_group.url.match(/\/(\d+)\/?$/)?.[1]);
+      if (
+        details.move_learn_method.name !== learnMethod ||
+        id !== versionGroupId
+      ) {
+        continue;
+      }
+      const level = details.level_learned_at;
+      if (!moves.has(entry.move.name) || level < moves.get(entry.move.name)!) {
+        moves.set(entry.move.name, level);
+      }
+    }
+  }
+  return moves;
+}
+
 function getStat(stats: PokemonApiResponse['stats'], name: string): number {
   const stat = stats.find((entry) => entry.stat.name === name);
   if (!stat) {
     throw new Error(`PokéAPI response is missing the ${name} stat.`);
   }
   return stat.base_stat;
-}
-
-function getPatternSize(power: number): PokemonMove['patternSize'] {
-  if (power >= 90) return 3;
-  if (power >= 45) return 2;
-  return 1;
 }
 
 function getStatusEffect(ailment: string | null | undefined): StatusEffect | null {
@@ -91,25 +168,113 @@ function getStatusChance(move: MoveApiResponse, statusEffect: StatusEffect | nul
       : 0;
 }
 
-export async function fetchPokemon(id: number): Promise<Pokemon> {
+function getMove(move: MoveApiResponse, name: string): PokemonMove {
+  const statusEffect = getStatusEffect(move.meta?.ailment?.name);
+  return {
+    name,
+    type: move.type.name,
+    power: move.power,
+    damageClass: move.damage_class.name,
+    category: move.meta?.category?.name ?? null,
+    maxHits: move.meta?.max_hits ?? 1,
+    accuracy: move.accuracy,
+    statusEffect,
+    statusChance: getStatusChance(move, statusEffect),
+  };
+}
+
+function isSupportedMove(move: PokemonMove): boolean {
+  return (
+    move.damageClass === 'status' ||
+    move.power !== null ||
+    move.category === 'ohko' ||
+    NULL_POWER_MOVE_OVERRIDES.has(move.name)
+  );
+}
+
+export async function fetchPokemonMoves(moveNames: string[]): Promise<PokemonMove[]> {
+  const uniqueNames = [...new Set(moveNames)];
+  const moves = await mapWithConcurrency(uniqueNames, 8, async (name) => {
+    const details = await fetchJson<MoveApiResponse>(`${API_BASE_URL}/move/${name}`);
+    return getMove(details, name);
+  });
+  return moves.filter(isSupportedMove);
+}
+
+export async function fetchPokemonLevelUpMoves(
+  pokemonId: number,
+  level: number
+): Promise<LevelUpMove[]> {
+  const pokemon = await fetchJson<PokemonApiResponse>(`${API_BASE_URL}/pokemon/${pokemonId}`);
+  const latestVersionGroupId = getLatestMainlineVersionGroupId(pokemon, ['level-up']);
+  if (latestVersionGroupId === undefined) return [];
+  const latestMoves = getMoveMethodRecords(pokemon, 'level-up', latestVersionGroupId);
+  const eligibleMoves = [...latestMoves].filter(([, learnedAtLevel]) => learnedAtLevel <= level);
+  const moves = await fetchPokemonMoves(eligibleMoves.map(([name]) => name));
+  return moves
+    .map((move) => ({
+      ...move,
+      learnedAtLevel: latestMoves.get(move.name) ?? 0,
+    }))
+    .sort((left, right) => left.learnedAtLevel - right.learnedAtLevel || left.name.localeCompare(right.name));
+}
+
+export async function fetchPokemonShopMoves(
+  pokemonId: number,
+  level: number
+): Promise<ShopLearnableMove[]> {
+  const pokemon = await fetchJson<PokemonApiResponse>(`${API_BASE_URL}/pokemon/${pokemonId}`);
+  const latestLevelGroup = getLatestMainlineVersionGroupId(pokemon, ['level-up']);
+  const latestMachineGroup = getLatestMainlineVersionGroupId(pokemon, ['machine']);
+  const available = new Map<
+    string,
+    { learnedAtLevel: number; learnMethod: ShopLearnableMove['learnMethod'] }
+  >();
+
+  if (latestLevelGroup !== undefined) {
+    for (const [name, learnedAtLevel] of getMoveMethodRecords(
+      pokemon,
+      'level-up',
+      latestLevelGroup
+    )) {
+      if (learnedAtLevel <= level) {
+        available.set(name, { learnedAtLevel, learnMethod: 'level-up' });
+      }
+    }
+  }
+  if (latestMachineGroup !== undefined) {
+    for (const [name, learnedAtLevel] of getMoveMethodRecords(
+      pokemon,
+      'machine',
+      latestMachineGroup
+    )) {
+      if (!available.has(name)) {
+        available.set(name, { learnedAtLevel, learnMethod: 'machine' });
+      }
+    }
+  }
+
+  const moves = await fetchPokemonMoves([...available.keys()]);
+  return moves
+    .map((move) => ({
+      ...move,
+      ...available.get(move.name)!,
+    }))
+    .sort(
+      (left, right) =>
+        Number(left.learnMethod === 'machine') - Number(right.learnMethod === 'machine') ||
+        left.learnedAtLevel - right.learnedAtLevel ||
+        left.name.localeCompare(right.name)
+    );
+}
+
+export async function fetchPokemon(
+  id: number,
+  moveNames: string[] = []
+): Promise<Pokemon> {
   const response = await fetchJson<PokemonApiResponse>(`${API_BASE_URL}/pokemon/${id}`);
   const species = await fetchJson<SpeciesApiResponse>(response.species.url);
-  const moves = await Promise.all(
-    response.moves.slice(0, 4).map(async ({ move }) => {
-      const details = await fetchJson<MoveApiResponse>(move.url);
-      const power = details.power ?? 20;
-      const statusEffect = getStatusEffect(details.meta?.ailment?.name);
-      return {
-        name: move.name,
-        type: details.type.name,
-        power,
-        patternSize: getPatternSize(power),
-        accuracy: details.accuracy,
-        statusEffect,
-        statusChance: getStatusChance(details, statusEffect),
-      };
-    })
-  );
+  const moves = await fetchPokemonMoves(moveNames);
 
   return {
     id: response.id,
@@ -120,7 +285,9 @@ export async function fetchPokemon(id: number): Promise<Pokemon> {
     stats: {
       hp: getStat(response.stats, 'hp'),
       attack: getStat(response.stats, 'attack'),
+      specialAttack: getStat(response.stats, 'special-attack'),
       defense: getStat(response.stats, 'defense'),
+      speed: getStat(response.stats, 'speed'),
     },
     captureRate: species.capture_rate,
     spriteUrl: response.sprites.other?.['official-artwork']?.front_default ?? null,
@@ -163,7 +330,7 @@ export async function fetchPokemonStarterData(id: number): Promise<{
   hp: number;
   spriteUrl: string | null;
 }> {
-  const response = await fetchJson<PokemonTypesApiResponse>(`${API_BASE_URL}/pokemon/${id}`);
+  const response = await fetchJson<PokemonApiResponse>(`${API_BASE_URL}/pokemon/${id}`);
   return {
     id: response.id,
     name: response.name,

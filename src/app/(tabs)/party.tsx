@@ -5,6 +5,7 @@ import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ScreenState } from '@/components/screen-state';
 import { ThemedText } from '@/components/themed-text';
 import { getMoveLabel } from '@/services/battle-rules';
+import { getMovePattern } from '@/services/move-patterns';
 import { usePartyController } from '@/hooks/use-party-controller';
 
 function capitalize(value: string): string {
@@ -148,14 +149,46 @@ export default function PartyScreen() {
 
             <ThemedText style={styles.sectionTitle}>MOVE PREVIEW</ThemedText>
             <View style={styles.moves}>
-              {selectedMember.pokemon.moves.map((move, index) => (
-                <View key={`${move.name}-${index}`} style={styles.moveCard}>
-                  <ThemedText style={styles.moveName}>{getMoveLabel(move.name)}</ThemedText>
-                  <ThemedText style={styles.memberMeta}>
-                    {move.patternSize}×{move.patternSize} · {move.type} · {move.power} power
-                  </ThemedText>
-                </View>
-              ))}
+              {selectedMember.pokemon.moves.map((move, index) => {
+                const pokemon = selectedMember.pokemon;
+                if (!pokemon) return null;
+                const pattern = getMovePattern(
+                  move,
+                  pokemon.stats,
+                  {
+                    level: selectedMember.level,
+                    currentHp: selectedMember.currentHp,
+                    maxHp: selectedMember.maxHp,
+                    lastPhysicalDamageTaken: selectedMember.lastPhysicalDamageTaken,
+                  }
+                );
+                return (
+                  <View key={`${move.name}-${index}`} style={styles.moveCard}>
+                    <ThemedText style={styles.moveName}>{getMoveLabel(move.name)}</ThemedText>
+                    <ThemedText style={styles.memberMeta}>
+                      {pattern.footprintSize}×{pattern.footprintSize} · {move.type} ·{' '}
+                      {pattern.hitCells.length} hit cells
+                    </ThemedText>
+                    <View style={styles.patternPreview}>
+                      {Array.from({ length: pattern.footprintSize }, (_, row) => (
+                        <View key={row} style={styles.patternRow}>
+                          {Array.from({ length: pattern.footprintSize }, (_, column) => (
+                            <View
+                              key={column}
+                              style={[
+                                styles.patternCell,
+                                pattern.hitCells.some(
+                                  (cell) => cell.row === row && cell.column === column
+                                ) && styles.patternCellHit,
+                              ]}
+                            />
+                          ))}
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                );
+              })}
             </View>
 
             {selectedMember.slot !== profile.activeSlot ? (
@@ -346,6 +379,23 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     backgroundColor: '#f6f3eb',
     justifyContent: 'center',
+  },
+  patternPreview: {
+    gap: 2,
+    marginTop: 6,
+  },
+  patternRow: {
+    flexDirection: 'row',
+    gap: 2,
+  },
+  patternCell: {
+    width: 7,
+    height: 7,
+    borderRadius: 2,
+    backgroundColor: '#eee8dd',
+  },
+  patternCellHit: {
+    backgroundColor: '#efb34f',
   },
   moveName: {
     fontWeight: '800',

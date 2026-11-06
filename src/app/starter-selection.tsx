@@ -10,6 +10,8 @@ import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
 import { usePlayer } from '@/providers/player-provider';
 import { getPlayerMaxHp } from '@/services/battle-rules';
+import { getInitialMoveNames } from '@/services/move-learning';
+import { fetchPokemonLevelUpMoves } from '@/services/pokeapi';
 import { fetchStarterOptions, type StarterOption } from '@/services/starter-selection';
 
 function capitalize(value: string): string {
@@ -75,7 +77,12 @@ export default function StarterSelectionScreen() {
     setConfirming(true);
     setConfirmError(null);
     try {
-      await selectStarter(pokemon.id, getPlayerMaxHp(pokemon.hp));
+      const learnableMoves = await fetchPokemonLevelUpMoves(pokemon.id, 1);
+      await selectStarter(
+        pokemon.id,
+        getPlayerMaxHp(pokemon.hp),
+        getInitialMoveNames(learnableMoves)
+      );
       router.replace('/');
     } catch (error) {
       setConfirmError(

@@ -19,8 +19,20 @@ import {
   finishRunIfDefeated,
   replacePartyMemberWithCatch as replacePartyMember,
 } from '@/services/run-rules';
-import { awardEncounterReward, buyShopItem, SHOP_CONFIG } from '@/services/shop';
-import type { BallType, HealingItem, PartyMember, PlayerProfile, ShopItemKey } from '@/types/game';
+import {
+  awardEncounterReward,
+  buyShopItem,
+  MOVE_LEARNING_PRICE,
+  SHOP_CONFIG,
+} from '@/services/shop';
+import type {
+  BallType,
+  HealingItem,
+  PartyMember,
+  PendingMoveUnlock,
+  PlayerProfile,
+  ShopItemKey,
+} from '@/types/game';
 
 type LoadState =
   | { status: 'loading' }
@@ -40,26 +52,42 @@ interface PlayerContextValue {
     statusFresh: PlayerProfile['opponentStatusFresh'],
     complete?: boolean
   ) => Promise<void>;
-  damageActivePokemon: (damage: number) => Promise<void>;
+  damageActivePokemon: (damage: number, isPhysical: boolean) => Promise<void>;
   switchPokemon: (slot: number) => Promise<void>;
-  selectStarter: (pokemonId: number, maxHp: number) => Promise<void>;
+  selectStarter: (pokemonId: number, maxHp: number, moves: string[]) => Promise<void>;
+  initializePartyMoves: (slot: number, moves: string[]) => Promise<void>;
+  learnMove: (
+    slot: number,
+    moveName: string,
+    replacedMoveName: string | null,
+    source: 'level-up' | 'shop'
+  ) => Promise<void>;
+  skipMoveUnlock: (slot: number, moveName: string) => Promise<void>;
   applyItem: (item: HealingItem, slot: number) => Promise<void>;
   purchaseItem: (item: ShopItemKey) => Promise<void>;
   resolveCatch: (
     ball: BallType,
     success: boolean,
     pokemonId: number,
-    maxHp: number
+    maxHp: number,
+    moves: string[]
   ) => Promise<void>;
   replacePartyMemberWithCatch: (slot: number) => Promise<void>;
   advanceEncounter: (
     opponentId: number,
     isAreaBoss: boolean,
     nextAreaId: string,
+    opponentMoves: string[],
+    newlyUnlockedMoves: PendingMoveUnlock[],
     specialBossId?: number,
     fromShop?: boolean
   ) => Promise<void>;
-  debugAdvanceToBoss: (opponentId: number, specialBossId?: number) => Promise<void>;
+  debugAdvanceToBoss: (
+    opponentId: number,
+    opponentMoves: string[],
+    specialBossId?: number
+  ) => Promise<void>;
+  initializeOpponentMoves: (moves: string[]) => Promise<void>;
   debugHealParty: () => Promise<void>;
   startNewRun: () => Promise<void>;
   debugWipeSaveData: () => Promise<void>;
@@ -148,13 +176,21 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
   );
 
   const damageActivePokemon = useCallback(
-    (damage: number) =>
+    (damage: number, isPhysical: boolean) =>
       updateProfile((profile) => {
         const active = profile.party.find((member) => member.slot === profile.activeSlot);
         if (!active) throw new Error('The active Pokémon is missing from the party.');
+        const damageTaken = Math.min(active.currentHp, Math.max(0, damage));
         const party = profile.party.map((member) =>
           member.slot === active.slot
-            ? { ...member, currentHp: Math.max(0, member.currentHp - damage) }
+            ? {
+                ...member,
+                currentHp: active.currentHp - damageTaken,
+                lastPhysicalDamageTaken:
+                  isPhysical && damageTaken > 0
+                    ? damageTaken
+                    : member.lastPhysicalDamageTaken,
+              }
             : member
         );
         return finishRunIfDefeated({ ...profile, party });
@@ -174,7 +210,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
   );
 
   const selectStarter = useCallback(
-    (pokemonId: number, maxHp: number) =>
+    (pokemonId: number, maxHp: number, moves: string[]) =>
       updateProfile((profile) => {
         if (profile.starterSelected || profile.party.length > 0) {
           throw new Error('A starter has already been selected for this run.');
@@ -191,12 +227,37 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
           currentHp: maxHp,
           maxHp,
           level: 1,
+          moves: [...new Set(moves)].slice(0, 4),
+          movesInitialized: true,
+          lastPhysicalDamageTaken: 0,
         };
         return {
           ...profile,
           starterSelected: true,
           activeSlot: starter.slot,
           party: [starter],
+        };
+      }),
+    [updateProfile]
+  );
+
+  const initializePartyMoves = useCallback(
+    (slot: number, moves: string[]) =>
+      updateProfile((profile) => {
+        const member = profile.party.find((pokemon) => pokemon.slot === slot);
+        if (!member) throw new Error('That Pokémon is not in your party.');
+        if (member.movesInitialized) return profile;
+        return {
+          ...profile,
+          party: profile.party.map((pokemon) =>
+            pokemon.slot === slot
+              ? {
+                  ...pokemon,
+                  moves: [...new Set(moves)].slice(0, 4),
+                  movesInitialized: true,
+                }
+              : pokemon
+          ),
         };
       }),
     [updateProfile]
@@ -225,8 +286,74 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     [updateProfile]
   );
 
+  const learnMove = useCallback(
+    (
+      slot: number,
+      moveName: string,
+      replacedMoveName: string | null,
+      source: 'level-up' | 'shop'
+    ) =>
+      updateProfile((profile) => {
+        const member = profile.party.find((pokemon) => pokemon.slot === slot);
+        if (!member) throw new Error('That Pokémon is not in your party.');
+        if (member.moves.includes(moveName)) {
+          throw new Error('That Pokémon already has this move equipped.');
+        }
+        const pending = profile.pendingMoveUnlocks.find(
+          (unlock) => unlock.slot === slot && unlock.pokemonId === member.pokemonId
+        );
+        if (source === 'level-up' && !pending?.moves.includes(moveName)) {
+          throw new Error('That move is not waiting to be learned.');
+        }
+        if (source === 'shop' && profile.money < MOVE_LEARNING_PRICE) {
+          throw new Error(`You need ${MOVE_LEARNING_PRICE - profile.money} more coins to learn that move.`);
+        }
+
+        let moves = member.moves;
+        if (moves.length >= 4) {
+          if (!replacedMoveName || !moves.includes(replacedMoveName)) {
+            throw new Error('Choose one of the Pokémon’s equipped moves to replace.');
+          }
+          moves = moves.filter((move) => move !== replacedMoveName);
+        } else if (replacedMoveName) {
+          throw new Error('Fill an empty move slot before replacing an equipped move.');
+        }
+
+        return {
+          ...profile,
+          party: profile.party.map((pokemon) =>
+            pokemon.slot === slot ? { ...pokemon, moves: [...moves, moveName] } : pokemon
+          ),
+          pendingMoveUnlocks: profile.pendingMoveUnlocks
+            .map((unlock) =>
+              unlock.slot === slot && unlock.pokemonId === member.pokemonId
+                ? { ...unlock, moves: unlock.moves.filter((move) => move !== moveName) }
+                : unlock
+            )
+            .filter((unlock) => unlock.moves.length > 0),
+          money: source === 'shop' ? profile.money - MOVE_LEARNING_PRICE : profile.money,
+        };
+      }),
+    [updateProfile]
+  );
+
+  const skipMoveUnlock = useCallback(
+    (slot: number, moveName: string) =>
+      updateProfile((profile) => ({
+        ...profile,
+        pendingMoveUnlocks: profile.pendingMoveUnlocks
+          .map((unlock) =>
+            unlock.slot === slot
+              ? { ...unlock, moves: unlock.moves.filter((move) => move !== moveName) }
+              : unlock
+          )
+          .filter((unlock) => unlock.moves.length > 0),
+      })),
+    [updateProfile]
+  );
+
   const resolveCatch = useCallback(
-    (ball: BallType, success: boolean, pokemonId: number, maxHp: number) =>
+    (ball: BallType, success: boolean, pokemonId: number, maxHp: number, moves: string[]) =>
       updateProfile((profile) => {
         if (profile.encounterComplete) throw new Error('This encounter is already complete.');
         if (profile.pendingCatch) throw new Error('Choose a Pokémon to release before continuing.');
@@ -239,6 +366,9 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
             currentHp: maxHp,
             maxHp,
             level: getPlayerProgressionLevel(profile.areaNumber, profile.encounterIndex),
+            moves: [...new Set(moves)].slice(0, 4),
+            movesInitialized: true,
+            lastPhysicalDamageTaken: 0,
           };
           if (party.length >= 6) {
             pendingCatch = caught;
@@ -285,6 +415,8 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
       opponentId: number,
       isAreaBoss: boolean,
       nextAreaId: string,
+      opponentMoves: string[],
+      newlyUnlockedMoves: PendingMoveUnlock[],
       specialBossId?: number,
       fromShop = false
     ) =>
@@ -318,15 +450,38 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         const party = profile.party.map((member) => ({
           ...member,
           level: playerLevel,
+          lastPhysicalDamageTaken: 0,
         }));
+        const existingPending = new Set(
+          profile.pendingMoveUnlocks.flatMap((unlock) =>
+            unlock.moves.map((move) => `${unlock.slot}:${move}`)
+          )
+        );
+        const validUnlocks = newlyUnlockedMoves
+          .map((unlock) => ({
+            ...unlock,
+            moves: unlock.moves.filter((move) => {
+              const member = party.find((candidate) => candidate.slot === unlock.slot);
+              const key = `${unlock.slot}:${move}`;
+              return (
+                member?.pokemonId === unlock.pokemonId &&
+                !member.moves.includes(move) &&
+                !existingPending.has(key)
+              );
+            }),
+          }))
+          .filter((unlock) => unlock.moves.length > 0);
         return {
           ...profile,
+          pendingMoveUnlocks: [...profile.pendingMoveUnlocks, ...validUnlocks],
           opponentId,
           opponentLevel: next.opponentLevel,
           opponentIsAreaBoss: next.isAreaBoss,
           opponentCells: [],
           opponentStatuses: [],
           opponentStatusFresh: [],
+          opponentMoves: [...new Set(opponentMoves)].slice(0, 4),
+          opponentMovesInitialized: true,
           encounterComplete: false,
           areaId: next.areaId,
           areaNumber: next.areaNumber,
@@ -340,7 +495,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
   );
 
   const debugAdvanceToBoss = useCallback(
-    (opponentId: number, specialBossId?: number) =>
+    (opponentId: number, opponentMoves: string[], specialBossId?: number) =>
       updateProfile((profile) => {
         if (profile.opponentIsAreaBoss) {
           throw new Error('You are already at this area’s boss.');
@@ -359,15 +514,31 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
           opponentCells: [],
           opponentStatuses: [],
           opponentStatusFresh: [],
+          opponentMoves: [...new Set(opponentMoves)].slice(0, 4),
+          opponentMovesInitialized: true,
           encounterComplete: false,
           encounterIndex: 9,
           party: profile.party.map((member) => ({
             ...member,
             level: getPlayerProgressionLevel(profile.areaNumber, 9),
+            lastPhysicalDamageTaken: 0,
           })),
           usedSpecialBossIds: specialBossId
             ? [...new Set([...profile.usedSpecialBossIds, specialBossId])]
             : profile.usedSpecialBossIds,
+        };
+      }),
+    [updateProfile]
+  );
+
+  const initializeOpponentMoves = useCallback(
+    (moves: string[]) =>
+      updateProfile((profile) => {
+        if (profile.opponentMovesInitialized) return profile;
+        return {
+          ...profile,
+          opponentMoves: [...new Set(moves)].slice(0, 4),
+          opponentMovesInitialized: true,
         };
       }),
     [updateProfile]
@@ -423,12 +594,16 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         damageActivePokemon,
         switchPokemon,
         selectStarter,
+        initializePartyMoves,
+        learnMove,
+        skipMoveUnlock,
         applyItem,
         purchaseItem,
         resolveCatch,
         replacePartyMemberWithCatch,
         advanceEncounter,
         debugAdvanceToBoss,
+        initializeOpponentMoves,
         debugHealParty,
         startNewRun,
         debugWipeSaveData,
