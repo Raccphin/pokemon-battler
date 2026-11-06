@@ -1,4 +1,4 @@
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -19,6 +19,7 @@ import { fetchPokemon } from '@/services/pokeapi';
 import { AREA_PROGRESSION_CONFIG, AREAS } from '@/services/area-progression';
 
 export default function GameOverScreen() {
+  const queryClient = useQueryClient();
   const { state, retry, startNewRun, debugWipeSaveData } = usePlayer();
   const summary = state.status === 'ready' ? state.profile.runSummary : null;
   const pokemonQueries = useQueries({
@@ -91,6 +92,7 @@ export default function GameOverScreen() {
     setBusy(true);
     setError(null);
     try {
+      queryClient.removeQueries({ queryKey: ['starter-options'] });
       await startNewRun();
       router.replace('/starter-selection');
     } catch (operationError) {
@@ -108,6 +110,7 @@ export default function GameOverScreen() {
     setBusy(true);
     setError(null);
     try {
+      queryClient.removeQueries({ queryKey: ['starter-options'] });
       await debugWipeSaveData();
       router.replace('/starter-selection');
     } catch (operationError) {
@@ -178,7 +181,7 @@ export default function GameOverScreen() {
             return (
               <View key={member.slot} style={styles.memberRow}>
                 <View style={styles.sprite}>
-                  {pokemon ? <PokemonSprite pokemon={pokemon} /> : null}
+                  {pokemon ? <PokemonSprite pokemon={pokemon} size={44} /> : null}
                 </View>
                 <View style={styles.memberDetails}>
                   <ThemedText style={styles.memberName}>

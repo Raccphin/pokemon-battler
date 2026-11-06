@@ -25,6 +25,22 @@ test('returns exactly three choices without any shared types', () => {
   }
 });
 
+test('can reroll a different starter set for a new run', () => {
+  const candidates = [
+    { id: 1, types: ['grass'] },
+    { id: 2, types: ['fire'] },
+    { id: 3, types: ['water'] },
+    { id: 4, types: ['electric'] },
+    { id: 5, types: ['psychic'] },
+    { id: 6, types: ['rock'] },
+  ];
+
+  const firstRun = chooseStarterCandidates(candidates, () => 0);
+  const secondRun = chooseStarterCandidates(candidates, () => 0.99);
+
+  assert.notDeepEqual(firstRun, secondRun);
+});
+
 test('keeps Pikachu and Eevee eligible without requiring either to appear', () => {
   assert.ok(STARTER_SELECTION_CONFIG.candidatePokemonIds.includes(25));
   assert.ok(STARTER_SELECTION_CONFIG.candidatePokemonIds.includes(133));
