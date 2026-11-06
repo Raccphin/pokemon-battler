@@ -5,7 +5,13 @@ import { usePlayer } from '@/providers/player-provider';
 import { fetchPokemon } from '@/services/pokeapi';
 
 export function usePartyController() {
-  const { state, operationError, switchPokemon, retry } = usePlayer();
+  const {
+    state,
+    operationError,
+    switchPokemon,
+    retry,
+    debugWipeSaveData,
+  } = usePlayer();
   const profile = state.status === 'ready' ? state.profile : null;
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const queries = useQueries({
@@ -44,6 +50,7 @@ export function usePartyController() {
     profile,
     operationError,
     retry,
+    debugWipeSaveData,
     loading,
     error,
     members,

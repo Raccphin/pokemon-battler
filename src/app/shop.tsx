@@ -12,14 +12,21 @@ import type { ShopItemKey } from '@/types/game';
 const SHOP_ITEMS: ShopItemKey[] = ['potion', 'revive', 'pokeBall', 'greatBall', 'ultraBall'];
 
 export default function ShopScreen() {
-  const { state, operationError, retry, purchaseItem } = usePlayer();
+  const { state, operationError, retry, purchaseItem, debugWipeSaveData } = usePlayer();
   const battle = useBattleController();
 
   if (state.status === 'loading') {
     return <ScreenState title="Loading the shop" message="Restoring your coin pouch." loading />;
   }
   if (state.status === 'error') {
-    return <ScreenState title="Save unavailable" message={state.message} onRetry={retry} />;
+    return (
+      <ScreenState
+        title="Save unavailable"
+        message={state.message}
+        onRetry={retry}
+        onWipeSave={debugWipeSaveData}
+      />
+    );
   }
 
   const { profile } = state;

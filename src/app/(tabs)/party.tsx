@@ -29,6 +29,7 @@ export default function PartyScreen() {
         title="Save unavailable"
         message={party.state.message}
         onRetry={party.retry}
+        onWipeSave={party.debugWipeSaveData}
       />
     );
   }

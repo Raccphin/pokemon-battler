@@ -164,10 +164,7 @@ function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
   };
 }
 
-export async function openPlayerDatabase(): Promise<{
-  database: SQLite.SQLiteDatabase;
-  profile: PlayerProfile;
-}> {
+export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatabase> {
   const database = await SQLite.openDatabaseAsync(DATABASE_NAME);
   await database.execAsync(`
     CREATE TABLE IF NOT EXISTS player_save (
@@ -236,6 +233,12 @@ export async function openPlayerDatabase(): Promise<{
     initialArea.startingPokemonId,
     initialArea.id,
   );
+  return database;
+}
+
+export async function loadPlayerProfile(
+  database: SQLite.SQLiteDatabase,
+): Promise<PlayerProfile> {
   const save = await database.getFirstAsync<SaveRow>(
     "SELECT * FROM player_save WHERE id = 1",
   );
@@ -245,7 +248,16 @@ export async function openPlayerDatabase(): Promise<{
   const party = await database.getAllAsync<PartyRow>(
     "SELECT * FROM party_member ORDER BY slot",
   );
-  return { database, profile: toProfile(save, party) };
+  return toProfile(save, party);
+}
+
+export async function openPlayerDatabase(): Promise<{
+  database: SQLite.SQLiteDatabase;
+  profile: PlayerProfile;
+}> {
+  const database = await openPlayerDatabaseConnection();
+  const profile = await loadPlayerProfile(database);
+  return { database, profile };
 }
 
 export async function persistPlayerProfile(
@@ -304,6 +316,7 @@ export async function resetPlayerSave(
     const result = await database.runAsync(
       `UPDATE player_save SET starter_selected = 0, active_slot = 0, opponent_id = ?,
        opponent_level = 1, opponent_is_area_boss = 0, opponent_cells = '[]',
+       opponent_statuses = '[]', opponent_status_fresh = '[]',
        encounter_complete = 0, area_id = ?, area_number = 1, encounter_index = 0,
        used_special_boss_ids = '[]', money = 0, shop_progress = 0,
        poke_balls = 5, great_balls = 2, ultra_balls = 1, potions = 3, revives = 1

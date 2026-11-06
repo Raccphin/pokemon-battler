@@ -26,7 +26,7 @@ function canUseItem(member: { currentHp: number; maxHp: number }, item: HealingI
 }
 
 export default function BagScreen() {
-  const { state, operationError, retry, applyItem } = usePlayer();
+  const { state, operationError, retry, applyItem, debugWipeSaveData } = usePlayer();
   const [selectedItem, setSelectedItem] = useState<HealingItem | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -37,7 +37,12 @@ export default function BagScreen() {
   }
   if (state.status === 'error') {
     return (
-      <ScreenState title="Save unavailable" message={state.message} onRetry={retry} />
+      <ScreenState
+        title="Save unavailable"
+        message={state.message}
+        onRetry={retry}
+        onWipeSave={debugWipeSaveData}
+      />
     );
   }
 

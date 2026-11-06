@@ -18,7 +18,7 @@ function capitalize(value: string): string {
 
 export default function StarterSelectionScreen() {
   const theme = useTheme();
-  const { state, selectStarter, retry } = usePlayer();
+  const { state, selectStarter, retry, debugWipeSaveData } = usePlayer();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
@@ -37,6 +37,7 @@ export default function StarterSelectionScreen() {
         title="Save unavailable"
         message={state.message}
         onRetry={retry}
+        onWipeSave={debugWipeSaveData}
       />
     );
   }

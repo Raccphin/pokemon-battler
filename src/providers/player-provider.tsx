@@ -4,7 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import {
   consumeBall,
   applyHealingItem,
-  openPlayerDatabase,
+  loadPlayerProfile,
+  openPlayerDatabaseConnection,
   persistPlayerProfile,
   resetPlayerSave,
 } from '@/services/player-database';
@@ -67,10 +68,12 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
 
   useEffect(() => {
     let active = true;
-    void openPlayerDatabase()
-      .then(({ database, profile }) => {
+    void openPlayerDatabaseConnection()
+      .then(async (database) => {
         if (!active) return;
         databaseRef.current = database;
+        const profile = await loadPlayerProfile(database);
+        if (!active) return;
         profileRef.current = profile;
         setState({ status: 'ready', profile });
       })
@@ -327,7 +330,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
   const debugWipeSaveData = useCallback(() => {
     const operation = queueRef.current.then(async () => {
       const database = databaseRef.current;
-      if (!database || !profileRef.current) {
+      if (!database) {
         throw new Error('The player save is not ready yet.');
       }
       const profile = await resetPlayerSave(database);

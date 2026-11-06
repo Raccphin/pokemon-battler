@@ -96,8 +96,9 @@ export default function BattleScreen() {
     return (
       <ScreenState
         title="Save unavailable"
-        message={battle.state.message}
+        message={battle.operationError ?? battle.state.message}
         onRetry={battle.retry}
+        onWipeSave={battle.debugWipeSaveData}
       />
     );
   }
