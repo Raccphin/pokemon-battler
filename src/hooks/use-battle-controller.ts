@@ -19,6 +19,7 @@ import {
   getBossAttack,
   getBossGridDimensions,
   getBossGridHpBlockCount,
+  getOpponentHpBlockCount,
   getMoveLabel,
   getPlayerMaxHp,
   resolveStatusTurn,
@@ -85,6 +86,7 @@ export function useBattleController() {
     initializeOpponentMoves,
     learnMove,
     skipMoveUnlock,
+    skipAllMoveUnlocks,
     evolvePokemon,
     deferEvolution,
   } = usePlayer();
@@ -161,7 +163,10 @@ export function useBattleController() {
   const area = profile ? getAreaById(profile.areaId) : null;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('Choose a move to view its attack pattern.');
-  const [catchAnimation, setCatchAnimation] = useState<{ positions: number[] } | null>(null);
+  const [catchAnimation, setCatchAnimation] = useState<{
+    ball: BallType;
+    positions: number[];
+  } | null>(null);
   const playerPokemon = playerQuery.data;
   const bossPokemon = bossQuery.data;
   const opponentLevel = profile?.opponentLevel ?? 1;
@@ -298,7 +303,7 @@ export function useBattleController() {
       activeMember?.movesInitialized &&
       profile?.opponentMovesInitialized
   );
-  const bossRemaining = cells.filter(Boolean).length;
+  const bossRemaining = getOpponentHpBlockCount(cells, statuses);
   const bossDefeated = Boolean(profile?.encounterComplete && bossRemaining === 0);
   const bossCaught = Boolean(profile?.encounterComplete && bossRemaining > 0);
   const currentHp = activeMember?.currentHp ?? 0;
@@ -350,11 +355,13 @@ export function useBattleController() {
             opponentSkipped: false,
           };
       const nextCells = statusTurn.cells;
-      const defeated = nextCells.every((cell) => !cell);
+      const defeated = getOpponentHpBlockCount(nextCells, statusTurn.statuses) === 0;
       const clearedByStatuses =
-        attackedGrid.cells.filter(Boolean).length - nextCells.filter(Boolean).length;
+        getOpponentHpBlockCount(attackedGrid.cells, attackedGrid.statuses) -
+        getOpponentHpBlockCount(nextCells, statusTurn.statuses);
       const clearedByMove =
-        cells.filter(Boolean).length - attackedGrid.cells.filter(Boolean).length;
+        getOpponentHpBlockCount(cells, statuses) -
+        getOpponentHpBlockCount(attackedGrid.cells, attackedGrid.statuses);
       const moveMessage = !moveHits
         ? `${getMoveLabel(move.name)} missed.`
         : pattern.effectivePower === null
@@ -460,12 +467,13 @@ export function useBattleController() {
         getPlayerMaxHp(bossPokemon.stats.hp),
         getInitialMoveNames(bossLearnsetQuery.data ?? [])
       );
-      setCatchAnimation({ positions: randomCells(ballDetails.count, totalCells) });
+      setCatchAnimation({ ball, positions: randomCells(ballDetails.count, totalCells) });
       setMessage(`${ballDetails.label} is wobbling…`);
       for (let wobble = 1; wobble <= 3; wobble += 1) {
         await sleep(650);
         rumble();
         setCatchAnimation({
+          ball,
           positions:
             wobble === 3 ? [landingCell] : randomCells(ballDetails.count, totalCells),
         });
@@ -789,6 +797,7 @@ export function useBattleController() {
     selectedPattern,
     learnMove,
     skipMoveUnlock,
+    skipAllMoveUnlocks,
     evolvePokemon,
     deferEvolution,
     busy,

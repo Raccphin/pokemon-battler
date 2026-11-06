@@ -6,6 +6,7 @@ import {
 } from '@/services/area-progression';
 import { getMovePatternPower } from '@/services/move-patterns';
 import { getLevelAdjustedHp, getLevelAdjustedStat } from '@/services/pokemon-stats';
+export { getOpponentHpBlockCount } from '@/services/opponent-health';
 
 export interface GridDimensions {
   rows: number;

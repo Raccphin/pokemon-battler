@@ -65,6 +65,7 @@ interface PlayerContextValue {
     source: 'level-up' | 'shop'
   ) => Promise<void>;
   skipMoveUnlock: (slot: number, moveName: string) => Promise<void>;
+  skipAllMoveUnlocks: () => Promise<void>;
   evolvePokemon: (
     slot: number,
     targetPokemonId: number,
@@ -441,6 +442,15 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     [updateProfile]
   );
 
+  const skipAllMoveUnlocks = useCallback(
+    () =>
+      updateProfile((profile) => ({
+        ...profile,
+        pendingMoveUnlocks: [],
+      })),
+    [updateProfile]
+  );
+
   const resolveCatch = useCallback(
     (ball: BallType, success: boolean, pokemonId: number, maxHp: number, moves: string[]) =>
       updateProfile((profile) => {
@@ -725,6 +735,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         initializePartyMoves,
         learnMove,
         skipMoveUnlock,
+        skipAllMoveUnlocks,
         evolvePokemon,
         deferEvolution,
         applyItem,
