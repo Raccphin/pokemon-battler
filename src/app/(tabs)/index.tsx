@@ -1,10 +1,11 @@
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 
 import { MoveCard } from '@/components/battle/move-card';
+import { MovePatternPreview } from '@/components/battle/move-pattern-preview';
 import { AreaBackground } from '@/components/battle/area-background';
 import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ScreenState } from '@/components/screen-state';
@@ -13,14 +14,21 @@ import { useBattleController } from '@/hooks/use-battle-controller';
 import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
 import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
 import { getMoveLabel, getPlayerMaxHp } from '@/services/battle-rules';
+import { getMovePattern } from '@/services/move-patterns';
 import { SHOP_CONFIG } from '@/services/shop';
-import { fetchPokemon } from '@/services/pokeapi';
-import type { PokemonMove } from '@/types/game';
+import { fetchPokemon, fetchPokemonMoves } from '@/services/pokeapi';
+import type { BallType, PokemonMove } from '@/types/game';
 import { router, useLocalSearchParams, usePathname } from 'expo-router';
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
+
+const BALL_SPRITES: Record<BallType, number> = {
+  pokeBall: require('../../../assets/images/pokeballs/pokeball.png'),
+  greatBall: require('../../../assets/images/pokeballs/greatball.png'),
+  ultraBall: require('../../../assets/images/pokeballs/ultraball.png'),
+};
 
 export default function BattleScreen() {
   const gridRef = useRef<React.ElementRef<typeof View>>(null);
@@ -28,6 +36,7 @@ export default function BattleScreen() {
   const [selectedUnlockSlot, setSelectedUnlockSlot] = useState<number | null>(null);
   const [selectedUnlockedMove, setSelectedUnlockedMove] = useState<string | null>(null);
   const [selectedReplacedMove, setSelectedReplacedMove] = useState<string | null>(null);
+  const [previewMoveName, setPreviewMoveName] = useState<string | null>(null);
   const [confirmMoveReplacement, setConfirmMoveReplacement] = useState(false);
   const [moveLearningError, setMoveLearningError] = useState<string | null>(null);
   const [savingMove, setSavingMove] = useState(false);
@@ -40,6 +49,28 @@ export default function BattleScreen() {
         queryKey: ['pokemon', member.pokemonId, member.moves],
         queryFn: () => fetchPokemon(member.pokemonId, member.moves),
       })) ?? [],
+  });
+  const selectedUnlockForPreview =
+    battle.profile?.pendingMoveUnlocks.find(
+      (unlock) => unlock.slot === selectedUnlockSlot
+    ) ?? battle.profile?.pendingMoveUnlocks[0];
+  const unlockMemberForPreview = selectedUnlockForPreview
+    ? battle.profile?.party.find(
+        (member) =>
+          member.slot === selectedUnlockForPreview.slot &&
+          member.pokemonId === selectedUnlockForPreview.pokemonId
+      )
+    : undefined;
+  const movePreviewNames = [
+    ...new Set([
+      ...(unlockMemberForPreview?.moves ?? []),
+      ...(selectedUnlockForPreview?.moves ?? []),
+    ]),
+  ].sort();
+  const movePreviewQuery = useQuery({
+    queryKey: ['pokemon-moves', movePreviewNames],
+    queryFn: () => fetchPokemonMoves(movePreviewNames),
+    enabled: movePreviewNames.length > 0,
   });
   const pendingEvolution = battle.profile?.pendingEvolutions.find(
     (evolution) => !evolution.prompted
@@ -145,6 +176,23 @@ export default function BattleScreen() {
           member.slot === selectedUnlock.slot && member.pokemonId === selectedUnlock.pokemonId
       )
     : undefined;
+  const unlockMemberIndex = unlockMember
+    ? profile.party.findIndex((member) => member.slot === unlockMember.slot)
+    : -1;
+  const unlockPokemon = partyPokemonQueries[unlockMemberIndex]?.data;
+  const activePreviewMoveName = selectedUnlockedMove ?? previewMoveName;
+  const previewMove = movePreviewQuery.data?.find(
+    (move) => move.name === activePreviewMoveName
+  );
+  const previewPattern =
+    previewMove && unlockPokemon && unlockMember
+      ? getMovePattern(previewMove, unlockPokemon.stats, {
+          level: unlockMember.level,
+          currentHp: unlockMember.currentHp,
+          maxHp: unlockMember.maxHp,
+          lastPhysicalDamageTaken: unlockMember.lastPhysicalDamageTaken,
+        })
+      : null;
   if (!activeMember) {
     return (
       <ScreenState
@@ -377,8 +425,12 @@ export default function BattleScreen() {
                           },
                           ball && styles.gridCellBall,
                         ]}>
-                        {ball ? (
-                          <Text style={styles.ballGlyph}>●</Text>
+                        {ball && battle.catchAnimation ? (
+                          <Image
+                            contentFit="contain"
+                            source={BALL_SPRITES[battle.catchAnimation.ball]}
+                            style={styles.catchBallSprite}
+                          />
                         ) : statusPresentation ? (
                           <Image
                             contentFit="contain"
@@ -396,7 +448,7 @@ export default function BattleScreen() {
                 </View>
               ))}
             </View>
-            {battle.bossDefeated && !profile.pendingCatch ? (
+            {(battle.bossDefeated || battle.bossCaught) && !profile.pendingCatch ? (
               <View style={styles.gridContinueOverlay}>
                 <Pressable
                   accessibilityRole="button"
@@ -420,7 +472,9 @@ export default function BattleScreen() {
             ) : null}
           </View>
           <ThemedText style={styles.gridHint}>
-            {battle.bossDefeated
+            {battle.bossCaught
+              ? 'Opponent caught.'
+              : battle.bossDefeated
               ? 'Opponent defeated.'
               : battle.catchAnimation
               ? 'Wobble…'
@@ -731,6 +785,11 @@ export default function BattleScreen() {
         onRequestClose={() => undefined}>
         <View style={styles.modalBackdrop}>
           <View style={styles.moveLearningModal}>
+            <ScrollView
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+              style={styles.moveLearningContent}
+              contentContainerStyle={styles.moveLearningContentContainer}>
             {confirmMoveReplacement ? (
               <>
                 <ThemedText style={styles.modalTitle}>Replace this move?</ThemedText>
@@ -744,7 +803,7 @@ export default function BattleScreen() {
                     accessibilityRole="button"
                     disabled={savingMove}
                     onPress={() => setConfirmMoveReplacement(false)}
-                    style={styles.secondaryButton}>
+                    style={[styles.secondaryButton, styles.modalActionButton]}>
                     <ThemedText style={styles.secondaryButtonText}>Go back</ThemedText>
                   </Pressable>
                   <Pressable
@@ -764,6 +823,7 @@ export default function BattleScreen() {
                         setConfirmMoveReplacement(false);
                         setSelectedUnlockedMove(null);
                         setSelectedReplacedMove(null);
+                        setPreviewMoveName(null);
                       } catch (error) {
                         setMoveLearningError(
                           error instanceof Error ? error.message : 'The move could not be learned.'
@@ -772,7 +832,7 @@ export default function BattleScreen() {
                         setSavingMove(false);
                       }
                     }}
-                    style={styles.primaryButton}>
+                    style={[styles.primaryButton, styles.modalActionButton]}>
                     <Text style={styles.primaryButtonText}>
                       {savingMove ? 'SAVING…' : 'YES, REPLACE IT'}
                     </Text>
@@ -805,6 +865,7 @@ export default function BattleScreen() {
                               setSelectedUnlockSlot(unlock.slot);
                               setSelectedUnlockedMove(null);
                               setSelectedReplacedMove(null);
+                              setPreviewMoveName(null);
                               setMoveLearningError(null);
                             }}
                             style={[
@@ -828,61 +889,145 @@ export default function BattleScreen() {
                 ) : null}
                 <ThemedText style={styles.modalSectionTitle}>CURRENT MOVES</ThemedText>
                 <View style={styles.unlockOptions}>
-                  {unlockMember?.moves.map((move) => (
-                    <Pressable
-                      accessibilityRole="button"
-                      key={move}
-                      disabled={unlockMember.moves.length < 4}
-                      onPress={() => setSelectedReplacedMove(move)}
-                      style={[
-                        styles.moveOption,
-                        selectedReplacedMove === move && styles.selectedOption,
-                        unlockMember.moves.length < 4 && styles.unselectableOption,
-                      ]}>
-                      <ThemedText style={styles.optionText}>{getMoveLabel(move)}</ThemedText>
-                    </Pressable>
-                  ))}
+                  {unlockMember?.moves.map((move) => {
+                    const moveDetails = movePreviewQuery.data?.find(
+                      (candidate) => candidate.name === move
+                    );
+                    const pattern =
+                      moveDetails && unlockPokemon && unlockMember
+                        ? getMovePattern(moveDetails, unlockPokemon.stats, {
+                            level: unlockMember.level,
+                            currentHp: unlockMember.currentHp,
+                            maxHp: unlockMember.maxHp,
+                            lastPhysicalDamageTaken: unlockMember.lastPhysicalDamageTaken,
+                          })
+                        : null;
+                    return (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`${getMoveLabel(move)}${pattern ? `, ${pattern.hitCells.length} hit cells in a ${pattern.footprintSize} by ${pattern.footprintSize} pattern` : ''}`}
+                        key={move}
+                        onPress={() => {
+                          setPreviewMoveName(move);
+                          if (unlockMember.moves.length >= 4) setSelectedReplacedMove(move);
+                        }}
+                        style={[
+                          styles.moveOption,
+                          styles.moveOptionDetails,
+                          (selectedReplacedMove === move || previewMoveName === move) &&
+                            styles.selectedOption,
+                        ]}>
+                        <View style={styles.moveOptionTextGroup}>
+                          <ThemedText style={styles.optionText}>{getMoveLabel(move)}</ThemedText>
+                          <ThemedText style={styles.moveOptionMeta}>
+                            {moveDetails
+                              ? `${moveDetails.type.toUpperCase()} · ${pattern?.hitCells.length ?? 0} hits`
+                              : 'Loading move details…'}
+                          </ThemedText>
+                        </View>
+                        {unlockMember.moves.length >= 4 ? (
+                          <ThemedText style={styles.skipButtonText}>
+                            {selectedReplacedMove === move ? 'REPLACE' : 'SELECT'}
+                          </ThemedText>
+                        ) : null}
+                      </Pressable>
+                    );
+                  })}
                   {unlockMember && unlockMember.moves.length < 4 ? (
                     <ThemedText style={styles.emptySlotHint}>
                       Empty slot available — the next move you learn will fill it.
                     </ThemedText>
                   ) : null}
                 </View>
+                {movePreviewQuery.isPending && movePreviewNames.length > 0 ? (
+                  <ThemedText style={styles.emptySlotHint}>Loading move previews…</ThemedText>
+                ) : null}
+                {movePreviewQuery.error ? (
+                  <View style={styles.replacementError}>
+                    <ThemedText style={styles.modalError}>
+                      {movePreviewQuery.error instanceof Error
+                        ? movePreviewQuery.error.message
+                        : 'Move details could not be loaded.'}
+                    </ThemedText>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => void movePreviewQuery.refetch()}
+                      style={styles.retryNamesButton}>
+                      <Text style={styles.retryNamesText}>Retry move details</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+                {previewMove && previewPattern ? (
+                  <MovePatternPreview
+                    move={previewMove}
+                    pattern={previewPattern}
+                    pokemon={unlockPokemon}
+                  />
+                ) : null}
                 <ThemedText style={styles.modalSectionTitle}>NEWLY UNLOCKED</ThemedText>
                 <ScrollView style={styles.unlockedMovesList} showsVerticalScrollIndicator>
                   <View style={styles.unlockOptions}>
-                    {selectedUnlock?.moves.map((move) => (
-                      <View
-                        key={move}
-                        style={[
-                          styles.moveOption,
-                          selectedUnlockedMove === move && styles.selectedOption,
-                        ]}>
-                        <Pressable
-                          accessibilityRole="button"
-                          onPress={() => {
-                            setSelectedUnlockedMove(move);
-                            setMoveLearningError(null);
-                          }}
-                          style={styles.moveOptionSelect}>
-                          <ThemedText style={styles.optionText}>{getMoveLabel(move)}</ThemedText>
-                        </Pressable>
-                        <Pressable
-                          accessibilityRole="button"
-                          hitSlop={8}
-                          onPress={() => {
-                            if (!selectedUnlock) return;
-                            if (selectedUnlockedMove === move) setSelectedUnlockedMove(null);
-                            void battle.skipMoveUnlock(selectedUnlock.slot, move).catch((error: unknown) =>
-                              setMoveLearningError(
-                                error instanceof Error ? error.message : 'The move could not be skipped.'
-                              )
-                            );
-                          }}>
-                          <ThemedText style={styles.skipButtonText}>Skip</ThemedText>
-                        </Pressable>
-                      </View>
-                    ))}
+                    {selectedUnlock?.moves.map((move) => {
+                      const moveDetails = movePreviewQuery.data?.find(
+                        (candidate) => candidate.name === move
+                      );
+                      const pattern =
+                        moveDetails && unlockPokemon && unlockMember
+                          ? getMovePattern(moveDetails, unlockPokemon.stats, {
+                              level: unlockMember.level,
+                              currentHp: unlockMember.currentHp,
+                              maxHp: unlockMember.maxHp,
+                              lastPhysicalDamageTaken: unlockMember.lastPhysicalDamageTaken,
+                            })
+                          : null;
+                      return (
+                        <View
+                          key={move}
+                          style={[
+                            styles.moveOption,
+                            selectedUnlockedMove === move && styles.selectedOption,
+                          ]}>
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={() => {
+                              setSelectedUnlockedMove(move);
+                              setPreviewMoveName(move);
+                              setMoveLearningError(null);
+                            }}
+                            style={styles.moveOptionSelect}>
+                            <View style={styles.moveOptionTextGroup}>
+                              <ThemedText style={styles.optionText}>
+                                {getMoveLabel(move)}
+                              </ThemedText>
+                              <ThemedText style={styles.moveOptionMeta}>
+                                {moveDetails && pattern
+                                  ? `${moveDetails.type.toUpperCase()} · ${pattern.hitCells.length} hits`
+                                  : 'Loading move details…'}
+                              </ThemedText>
+                            </View>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            hitSlop={8}
+                            onPress={() => {
+                              if (!selectedUnlock) return;
+                              if (selectedUnlockedMove === move) setSelectedUnlockedMove(null);
+                              if (previewMoveName === move) setPreviewMoveName(null);
+                              void battle
+                                .skipMoveUnlock(selectedUnlock.slot, move)
+                                .catch((error: unknown) =>
+                                  setMoveLearningError(
+                                    error instanceof Error
+                                      ? error.message
+                                      : 'The move could not be skipped.'
+                                  )
+                                );
+                            }}>
+                            <ThemedText style={styles.skipButtonText}>Skip</ThemedText>
+                          </Pressable>
+                        </View>
+                      );
+                    })}
                   </View>
                 </ScrollView>
                 {moveLearningError ? (
@@ -913,6 +1058,8 @@ export default function BattleScreen() {
                         'level-up'
                       );
                       setSelectedUnlockedMove(null);
+                      setSelectedReplacedMove(null);
+                      setPreviewMoveName(null);
                     } catch (error) {
                       setMoveLearningError(
                         error instanceof Error ? error.message : 'The move could not be learned.'
@@ -939,8 +1086,36 @@ export default function BattleScreen() {
                           : 'SELECT A NEW MOVE'}
                   </Text>
                 </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={savingMove}
+                  onPress={async () => {
+                    setSavingMove(true);
+                    setMoveLearningError(null);
+                    try {
+                      await battle.skipAllMoveUnlocks();
+                      setSelectedUnlockedMove(null);
+                      setSelectedReplacedMove(null);
+                      setPreviewMoveName(null);
+                      setSelectedUnlockSlot(null);
+                    } catch (error) {
+                      setMoveLearningError(
+                        error instanceof Error
+                          ? error.message
+                          : 'The remaining moves could not be skipped.'
+                      );
+                    } finally {
+                      setSavingMove(false);
+                    }
+                  }}
+                  style={[styles.skipAllMovesButton, savingMove && styles.disabledButton]}>
+                  <Text style={styles.skipAllMovesText}>
+                    {savingMove ? 'SAVING…' : 'SKIP ALL REMAINING MOVES'}
+                  </Text>
+                </Pressable>
               </>
             )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1198,6 +1373,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#e65d43',
   },
+  catchBallSprite: {
+    width: 26,
+    height: 26,
+  },
   cellDot: {
     width: 5,
     height: 5,
@@ -1209,11 +1388,6 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
     backgroundColor: '#bfd3b7',
-  },
-  ballGlyph: {
-    color: '#e34836',
-    fontSize: 22,
-    fontWeight: '900',
   },
   gridHint: {
     color: '#6f6a61',
@@ -1380,11 +1554,20 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(27, 38, 46, 0.72)',
   },
   moveLearningModal: {
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 480,
     maxHeight: '90%',
-    padding: 18,
-    borderRadius: 22,
+    padding: 14,
+    borderRadius: 18,
     backgroundColor: '#fffaf2',
+  },
+  moveLearningContent: {
+    flexShrink: 1,
+  },
+  moveLearningContentContainer: {
     gap: 10,
+    paddingBottom: 2,
   },
   evolutionModal: {
     maxHeight: '90%',
@@ -1457,10 +1640,22 @@ const styles = StyleSheet.create({
     borderColor: '#e8dfd2',
     backgroundColor: '#ffffff',
   },
+  moveOptionDetails: {
+    minHeight: 52,
+  },
   moveOptionSelect: {
     flex: 1,
     minHeight: 40,
     justifyContent: 'center',
+  },
+  moveOptionTextGroup: {
+    flex: 1,
+    gap: 2,
+  },
+  moveOptionMeta: {
+    color: '#77736b',
+    fontSize: 10,
+    fontWeight: '700',
   },
   selectedOption: {
     borderColor: '#e65d43',
@@ -1485,7 +1680,7 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   unlockedMovesList: {
-    maxHeight: 170,
+    maxHeight: 130,
   },
   modalError: {
     color: '#a13a39',
@@ -1493,16 +1688,40 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   learnMoveButton: {
+    minHeight: 48,
+    width: '100%',
     alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 10,
     paddingVertical: 14,
     borderRadius: 14,
     backgroundColor: '#e65d43',
   },
+  skipAllMovesButton: {
+    minHeight: 48,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: '#e8dfd2',
+  },
+  skipAllMovesText: {
+    color: '#39424a',
+    fontSize: 12,
+    fontWeight: '900',
+  },
   modalActions: {
     flexDirection: 'row',
     gap: 10,
     marginTop: 6,
+  },
+  modalActionButton: {
+    flex: 1,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
   },
   secondaryButton: {
     flex: 1,

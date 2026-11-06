@@ -6,9 +6,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useBattleController } from '@/hooks/use-battle-controller';
 import { ScreenState } from '@/components/screen-state';
+import { MovePatternPreview } from '@/components/battle/move-pattern-preview';
 import { ThemedText } from '@/components/themed-text';
 import { PokemonSprite } from '@/components/pokemon-sprite';
-import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
 import { usePlayer } from '@/providers/player-provider';
 import {
   MOVE_LEARNING_PRICE,
@@ -355,13 +355,24 @@ export default function ShopScreen() {
                       Empty move slots will be filled before replacing an equipped move.
                     </ThemedText>
                   ) : null}
+                  {previewMove && previewPattern ? (
+                    <MovePatternPreview
+                      move={previewMove}
+                      pattern={previewPattern}
+                      pokemon={selectedPokemon}
+                    />
+                  ) : null}
                   <ThemedText style={styles.moveSectionLabel}>AVAILABLE AT THIS LEVEL</ThemedText>
                   {learnableMoves.length === 0 ? (
                     <ThemedText style={styles.footerText}>
                       This Pokémon has no other supported level-up moves available yet.
                     </ThemedText>
                   ) : (
-                    <View style={styles.moveChoices}>
+                    <ScrollView
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator
+                      style={styles.availableMoveList}
+                      contentContainerStyle={styles.moveChoices}>
                       {learnableMoves.map((move) => (
                         <Pressable
                           accessibilityRole="button"
@@ -384,68 +395,8 @@ export default function ShopScreen() {
                           </ThemedText>
                         </Pressable>
                       ))}
-                    </View>
+                    </ScrollView>
                   )}
-                  {previewMove && previewPattern ? (
-                    <View style={styles.attackPreview}>
-                      <View style={styles.attackPreviewHeader}>
-                          {selectedPokemon ? (
-                          <PokemonSprite pokemon={selectedPokemon} size={38} />
-                        ) : null}
-                        <View style={styles.attackPreviewTitleGroup}>
-                          <ThemedText style={styles.moveSectionLabel}>ATTACK PREVIEW</ThemedText>
-                          <ThemedText style={styles.attackPreviewName}>
-                            {selectedPokemon
-                              ? `${getMoveLabel(selectedPokemon.name)} · ${getMoveLabel(previewMove.name)}`
-                              : getMoveLabel(previewMove.name)}
-                          </ThemedText>
-                        </View>
-                      </View>
-                      {previewMove.statusEffect ? (
-                        <ThemedText style={styles.previewStatus}>
-                          {STATUS_EFFECT_PRESENTATION[previewMove.statusEffect].label.toUpperCase()}
-                        </ThemedText>
-                      ) : null}
-                      <View style={styles.previewPattern}>
-                        {Array.from(
-                          { length: previewPattern.footprintSize },
-                          (_, row) => (
-                            <View key={row} style={styles.previewPatternRow}>
-                              {Array.from(
-                                { length: previewPattern.footprintSize },
-                                (_, column) => {
-                                  const hit = previewPattern.hitCells.some(
-                                    (cell) => cell.row === row && cell.column === column
-                                  );
-                                  const status = previewMove.statusEffect
-                                    ? STATUS_EFFECT_PRESENTATION[previewMove.statusEffect]
-                                    : null;
-                                  return (
-                                    <View
-                                      key={column}
-                                      style={[
-                                        styles.previewPatternCell,
-                                        hit && styles.previewPatternHit,
-                                        hit && status
-                                          ? { backgroundColor: status.color }
-                                          : null,
-                                      ]}
-                                    />
-                                  );
-                                }
-                              )}
-                            </View>
-                          )
-                        )}
-                      </View>
-                      <ThemedText style={styles.previewDetails}>
-                        {previewPattern.hitCells.length} hit cells ·{' '}
-                        {previewPattern.effectivePower === null
-                          ? 'fails until its condition is met'
-                          : `${previewPattern.effectivePower} power`}
-                      </ThemedText>
-                    </View>
-                  ) : null}
                   <Pressable
                     accessibilityRole="button"
                     disabled={
@@ -852,6 +803,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 7,
   },
+  availableMoveList: {
+    maxHeight: 180,
+  },
   moveChoice: {
     minHeight: 40,
     justifyContent: 'center',
@@ -879,59 +833,6 @@ const styles = StyleSheet.create({
     color: '#77736b',
     fontSize: 9,
     fontWeight: '700',
-  },
-  attackPreview: {
-    alignItems: 'center',
-    gap: 8,
-    padding: 12,
-    borderRadius: 14,
-    backgroundColor: '#25394a',
-  },
-  attackPreviewHeader: {
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  attackPreviewTitleGroup: {
-    alignItems: 'flex-start',
-  },
-  attackPreviewName: {
-    color: '#fffaf0',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  previewStatus: {
-    color: '#fffaf0',
-    fontSize: 10,
-    fontWeight: '900',
-  },
-  previewPattern: {
-    alignItems: 'center',
-    gap: 3,
-  },
-  previewPatternRow: {
-    flexDirection: 'row',
-    gap: 3,
-  },
-  previewPatternCell: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-  },
-  previewPatternHit: {
-    backgroundColor: '#efb34f',
-    borderColor: '#ffd787',
-  },
-  previewDetails: {
-    color: '#fffaf0',
-    fontSize: 10,
-    fontWeight: '700',
-    textAlign: 'center',
   },
   teachButton: {
     minHeight: 46,
