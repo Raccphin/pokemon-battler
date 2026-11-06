@@ -3,7 +3,10 @@ import test from 'node:test';
 
 import {
   AREA_PROGRESSION_CONFIG,
+  chooseRegularOpponentId,
+  getAreaGridTargetBlocks,
   getNextEncounterProgress,
+  getOpponentGridHpBlockCount,
   getOpponentProgressionLevel,
   getPlayerProgressionLevel,
   getProgressionLevel,
@@ -65,4 +68,71 @@ test('distributes five player levels across the ten encounter stages', () => {
     [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
   );
   assert.equal(getPlayerProgressionLevel(2, 0), 6);
+});
+
+test('regular opponent selection skips Legendary and Mythical Pokémon', async () => {
+  const classifiedIds = [];
+  const selectedId = await chooseRegularOpponentId(
+    [1, 2, 3],
+    [],
+    async (pokemonId) => {
+      classifiedIds.push(pokemonId);
+      return {
+        isLegendary: pokemonId === 1,
+        isMythical: pokemonId === 2,
+      };
+    },
+    () => 0
+  );
+
+  assert.equal(selectedId, 3);
+  assert.deepEqual(classifiedIds, [1, 2, 3]);
+});
+
+test('regular opponent selection skips previously used special Pokémon', async () => {
+  const classifiedIds = [];
+  const selectedId = await chooseRegularOpponentId(
+    [1, 2],
+    [1],
+    async (pokemonId) => {
+      classifiedIds.push(pokemonId);
+      return { isLegendary: false, isMythical: false };
+    },
+    () => 0
+  );
+
+  assert.equal(selectedId, 2);
+  assert.deepEqual(classifiedIds, [2]);
+});
+
+test('returns no regular opponent when every candidate is Legendary or Mythical', async () => {
+  const selectedId = await chooseRegularOpponentId(
+    [1, 2],
+    [],
+    async (pokemonId) => ({
+      isLegendary: pokemonId === 1,
+      isMythical: pokemonId === 2,
+    }),
+    () => 0
+  );
+
+  assert.equal(selectedId, undefined);
+});
+
+test('area grid block targets interpolate for regular and boss encounters', () => {
+  assert.equal(getAreaGridTargetBlocks(1, false), 1);
+  assert.equal(getAreaGridTargetBlocks(7, false), 16);
+  assert.equal(getAreaGridTargetBlocks(10, false), 81);
+  assert.equal(getAreaGridTargetBlocks(1, true), 9);
+  assert.equal(getAreaGridTargetBlocks(7, true), 25);
+  assert.equal(getAreaGridTargetBlocks(10, true), 144);
+  assert.equal(getAreaGridTargetBlocks(4, true), 17);
+  assert.equal(getAreaGridTargetBlocks(20, true), 144);
+});
+
+test('opponent HP block counts use half of scaled board capacity, rounded up', () => {
+  assert.equal(getOpponentGridHpBlockCount(1), 1);
+  assert.equal(getOpponentGridHpBlockCount(9), 5);
+  assert.equal(getOpponentGridHpBlockCount(25), 13);
+  assert.equal(getOpponentGridHpBlockCount(144), 72);
 });

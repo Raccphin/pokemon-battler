@@ -23,6 +23,7 @@ interface SaveRow {
   opponent_cells: string;
   opponent_statuses: string;
   opponent_status_fresh: string;
+  opponent_grid_version: number;
   opponent_moves: string;
   opponent_moves_initialized: number;
   pending_move_unlocks: string;
@@ -311,6 +312,7 @@ function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
       save.opponent_status_fresh,
       opponentCells.length,
     ),
+    opponentGridVersion: save.opponent_grid_version,
     opponentMoves: parseMoveNames(save.opponent_moves),
     opponentMovesInitialized: Boolean(save.opponent_moves_initialized),
     pendingMoveUnlocks: parsePendingMoveUnlocks(save.pending_move_unlocks),
@@ -357,6 +359,7 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
       opponent_cells TEXT NOT NULL,
       opponent_statuses TEXT NOT NULL DEFAULT '[]',
       opponent_status_fresh TEXT NOT NULL DEFAULT '[]',
+      opponent_grid_version INTEGER NOT NULL DEFAULT 0,
       opponent_moves TEXT NOT NULL DEFAULT '[]',
       opponent_moves_initialized INTEGER NOT NULL DEFAULT 0,
       pending_move_unlocks TEXT NOT NULL DEFAULT '[]',
@@ -397,6 +400,7 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
     ["opponent_is_area_boss", "INTEGER NOT NULL DEFAULT 0"],
     ["opponent_statuses", "TEXT NOT NULL DEFAULT '[]'"],
     ["opponent_status_fresh", "TEXT NOT NULL DEFAULT '[]'"],
+    ["opponent_grid_version", "INTEGER NOT NULL DEFAULT 0"],
     ["opponent_moves", "TEXT NOT NULL DEFAULT '[]'"],
     ["opponent_moves_initialized", "INTEGER NOT NULL DEFAULT 0"],
     ["pending_move_unlocks", "TEXT NOT NULL DEFAULT '[]'"],
@@ -480,7 +484,7 @@ export async function persistPlayerProfile(
     await database.runAsync(
       `UPDATE player_save SET active_slot = ?, opponent_id = ?, opponent_level = ?,
        starter_selected = ?, opponent_is_area_boss = ?, opponent_cells = ?, opponent_statuses = ?, opponent_status_fresh = ?,
-       opponent_moves = ?, opponent_moves_initialized = ?, pending_move_unlocks = ?,
+       opponent_grid_version = ?, opponent_moves = ?, opponent_moves_initialized = ?, pending_move_unlocks = ?,
        encounter_complete = ?, area_id = ?,
        area_number = ?, encounter_index = ?, used_special_boss_ids = ?, money = ?,
        shop_progress = ?, run_status = ?, run_summary = ?, pending_catch = ?,
@@ -493,6 +497,7 @@ export async function persistPlayerProfile(
       JSON.stringify(profile.opponentCells),
       JSON.stringify(profile.opponentStatuses),
       JSON.stringify(profile.opponentStatusFresh),
+      profile.opponentGridVersion,
       JSON.stringify(profile.opponentMoves),
       Number(profile.opponentMovesInitialized),
       JSON.stringify(profile.pendingMoveUnlocks),
@@ -539,7 +544,7 @@ export async function resetPlayerSave(
     const result = await database.runAsync(
       `UPDATE player_save SET starter_selected = 0, active_slot = 0, opponent_id = ?,
        opponent_level = 1, opponent_is_area_boss = 0, opponent_cells = '[]',
-       opponent_statuses = '[]', opponent_status_fresh = '[]',
+       opponent_statuses = '[]', opponent_status_fresh = '[]', opponent_grid_version = 0,
        opponent_moves = '[]', opponent_moves_initialized = 0, pending_move_unlocks = '[]',
        encounter_complete = 0, area_id = ?, area_number = 1, encounter_index = 0,
        used_special_boss_ids = '[]', money = 0, shop_progress = 0,

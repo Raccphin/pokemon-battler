@@ -3,6 +3,7 @@ import type {
   MovePatternCell,
   PokemonMove,
 } from '@/types/game';
+import { getLevelAdjustedStat } from '@/services/pokemon-stats';
 
 export interface MovePatternContext {
   level: number;
@@ -142,7 +143,7 @@ export function getMovePattern(
     move.damageClass === 'special'
       ? attackingStats.specialAttack
       : attackingStats.attack;
-  const levelAdjustedStat = Math.floor((2 * stat * context.level) / 100) + 5;
+  const levelAdjustedStat = getLevelAdjustedStat(stat, context.level);
   const footprintSize = statusMove ? 1 : getFootprintSize(levelAdjustedStat);
   const effectivePower = getMovePatternPower(move, context);
 

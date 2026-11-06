@@ -27,6 +27,6 @@ The player fights a raid boss by removing blocks from its health grid. The playe
 
 ## Current prototype rules
 
-Some balancing and raid-boss behavior are undecided. The first playable prototype uses a clearly isolated, deterministic counterattack rule and a tunable HP/Defense-to-grid formula. Keep these rules in the battle-logic module; do not treat them as final design decisions.
+Some balancing and raid-boss behavior are undecided. The first playable prototype uses a clearly isolated, deterministic counterattack rule and a tunable area-, level-, stat-scaled grid formula for all opponents, with half the scaled board capacity as HP blocks, separate regular and area-boss calibration targets, deterministic type-specific layouts, and a 12×12 maximum. Keep these rules in the battle-logic module; do not treat these rules as final design decisions.
 
 See [features/](./features/) for behavior and implementation requirements by feature.

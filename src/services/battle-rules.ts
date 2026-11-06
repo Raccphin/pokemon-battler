@@ -1,6 +1,11 @@
 import type { Pokemon, PokemonMove, StatusEffect } from '@/types/game';
-import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
+import {
+  AREA_PROGRESSION_CONFIG,
+  getAreaGridTargetBlocks,
+  getOpponentGridHpBlockCount,
+} from '@/services/area-progression';
 import { getMovePatternPower } from '@/services/move-patterns';
+import { getLevelAdjustedHp, getLevelAdjustedStat } from '@/services/pokemon-stats';
 
 export interface GridDimensions {
   rows: number;
@@ -153,12 +158,83 @@ export function resolveStatusTurn(
   };
 }
 
-export function getBossGridDimensions(pokemon: Pokemon, isAreaBoss = false): GridDimensions {
-  const columns = 6;
-  const rows = clamp(Math.ceil((pokemon.stats.hp + pokemon.stats.defense) / 45), 3, 6);
+export function getBossGridTypeAdjustment(
+  types: readonly string[] = []
+): Pick<GridDimensions, 'rows' | 'columns'> {
+  // Type-specific grid rules are intentionally left as a prototype no-op until
+  // they are explicitly approved and added here. Keep this separation in shared
+  // battle logic so visuals and animation never affect the rules.
+  return { rows: 0, columns: 0 };
+}
+
+function getBossGridTargetBlockCount(
+  pokemon: Pokemon,
+  level: number,
+  areaNumber: number,
+  isAreaBoss: boolean
+): number {
+  const effectiveBulk =
+    getLevelAdjustedHp(pokemon.stats.hp, level) +
+    getLevelAdjustedStat(pokemon.stats.defense, level) / 2 +
+    getLevelAdjustedStat(pokemon.stats.specialDefense, level) / 2;
+  const referenceStat = AREA_PROGRESSION_CONFIG.gridReferenceBaseStat;
+  const referenceBulk =
+    getLevelAdjustedHp(referenceStat, level) +
+    getLevelAdjustedStat(referenceStat, level);
+  const areaTargetBlocks = getAreaGridTargetBlocks(areaNumber, isAreaBoss);
+  return clamp(
+    Math.ceil(areaTargetBlocks * (effectiveBulk / referenceBulk)),
+    1,
+    AREA_PROGRESSION_CONFIG.bossGridMaxSide ** 2
+  );
+}
+
+export function getBossGridHpBlockCount(
+  pokemon: Pokemon,
+  level: number,
+  areaNumber: number,
+  isAreaBoss: boolean
+): number {
+  return getOpponentGridHpBlockCount(
+    getBossGridTargetBlockCount(pokemon, level, areaNumber, isAreaBoss)
+  );
+}
+
+export function getBossGridDimensions(
+  pokemon: Pokemon,
+  level: number,
+  isAreaBoss = false,
+  areaNumber = 1,
+  isSpecialAreaBoss = false
+): GridDimensions {
+  const totalBlocks = getBossGridTargetBlockCount(
+    pokemon,
+    level,
+    areaNumber,
+    isAreaBoss
+  );
+  const baseRows = Math.max(1, Math.floor(Math.sqrt(totalBlocks)));
+  const baseColumns = Math.ceil(totalBlocks / baseRows);
+  const typeAdjustment = getBossGridTypeAdjustment(pokemon.types);
   return {
-    rows: rows + (isAreaBoss ? AREA_PROGRESSION_CONFIG.bossExtraRows : 0),
-    columns: columns + (isAreaBoss ? AREA_PROGRESSION_CONFIG.bossExtraColumns : 0),
+    rows: clamp(
+      baseRows +
+        typeAdjustment.rows +
+        (isSpecialAreaBoss
+          ? AREA_PROGRESSION_CONFIG.specialBossGridExtraRows
+          : 0),
+      1,
+      AREA_PROGRESSION_CONFIG.bossGridMaxSide
+    ),
+    columns: clamp(
+      baseColumns +
+        typeAdjustment.columns +
+        (isSpecialAreaBoss
+          ? AREA_PROGRESSION_CONFIG.specialBossGridExtraColumns
+          : 0),
+      1,
+      AREA_PROGRESSION_CONFIG.bossGridMaxSide
+    ),
   };
 }
 

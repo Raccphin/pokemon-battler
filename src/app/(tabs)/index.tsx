@@ -323,7 +323,7 @@ export default function BattleScreen() {
                 {profile.opponentIsAreaBoss ? 'AREA BOSS VITALS' : 'OPPONENT VITALS'}
               </ThemedText>
               <ThemedText style={styles.hint}>
-                {battle.bossRemaining} of {battle.totalCells} blocks remain
+                {battle.bossRemaining} of {battle.totalHpBlocks} blocks remain
               </ThemedText>
             </View>
             <View style={styles.blocksPill}>
@@ -337,6 +337,7 @@ export default function BattleScreen() {
                   {Array.from({ length: dimensions.columns }, (_, column) => {
                     const index = row * dimensions.columns + column;
                     const active = battle.cells[index];
+                    const hasInitialBlock = battle.initialGridCells[index];
                     const status = battle.statuses[index];
                     const statusPresentation = status
                       ? STATUS_EFFECT_PRESENTATION[status]
@@ -345,13 +346,17 @@ export default function BattleScreen() {
                     return (
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel={`Boss grid row ${row + 1}, column ${column + 1}, ${statusPresentation ? `${statusPresentation.label} status, ${active ? 'occupied' : 'cleared'}` : active ? 'occupied' : 'cleared'}`}
+                        accessibilityLabel={`Boss grid row ${row + 1}, column ${column + 1}, ${statusPresentation ? `${statusPresentation.label} status, ${active ? 'occupied' : 'cleared'}` : active ? 'occupied' : hasInitialBlock ? 'cleared' : 'empty'}`}
                         disabled={battle.busy || !battle.canBattle || !battle.selectedMove}
                         key={index}
                         onPress={() => battle.handleGridCell(row, column)}
                         style={[
                           styles.gridCell,
-                          active ? styles.gridCellActive : styles.gridCellCleared,
+                          !hasInitialBlock
+                            ? styles.gridCellVoid
+                            : active
+                              ? styles.gridCellActive
+                              : styles.gridCellCleared,
                           statusPresentation && {
                             backgroundColor: statusPresentation.color,
                           },
@@ -367,9 +372,9 @@ export default function BattleScreen() {
                           />
                         ) : active ? (
                           <View style={styles.cellDot} />
-                        ) : (
+                        ) : hasInitialBlock ? (
                           <View style={styles.emptyDot} />
-                        )}
+                        ) : null}
                       </Pressable>
                     );
                   })}
@@ -1063,6 +1068,9 @@ const styles = StyleSheet.create({
   },
   gridCellCleared: {
     backgroundColor: '#e5eee2',
+  },
+  gridCellVoid: {
+    backgroundColor: 'rgba(229, 238, 226, 0.35)',
   },
   gridCellStatusIcon: {
     width: '64%',

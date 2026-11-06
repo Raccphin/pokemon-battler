@@ -50,7 +50,8 @@ interface PlayerContextValue {
     cells: boolean[],
     statuses: PlayerProfile['opponentStatuses'],
     statusFresh: PlayerProfile['opponentStatusFresh'],
-    complete?: boolean
+    complete?: boolean,
+    gridVersion?: number
   ) => Promise<void>;
   damageActivePokemon: (damage: number, isPhysical: boolean) => Promise<void>;
   switchPokemon: (slot: number) => Promise<void>;
@@ -157,19 +158,24 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
       cells: boolean[],
       statuses: PlayerProfile['opponentStatuses'],
       statusFresh: PlayerProfile['opponentStatusFresh'],
-      complete = false
+      complete?: boolean,
+      gridVersion?: number
     ) =>
       updateProfile((profile) => {
         if (cells.length !== statuses.length || cells.length !== statusFresh.length) {
           throw new Error('The boss grid and its status effects do not match.');
         }
-        const rewardedProfile = complete && !profile.encounterComplete ? awardEncounterReward(profile) : profile;
+        const rewardedProfile =
+          complete === true && !profile.encounterComplete
+            ? awardEncounterReward(profile)
+            : profile;
         return {
           ...rewardedProfile,
           opponentCells: cells,
           opponentStatuses: statuses,
           opponentStatusFresh: statusFresh,
-          encounterComplete: complete,
+          opponentGridVersion: gridVersion ?? profile.opponentGridVersion,
+          encounterComplete: complete ?? profile.encounterComplete,
         };
       }),
     [updateProfile]

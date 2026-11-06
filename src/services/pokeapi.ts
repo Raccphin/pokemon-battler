@@ -287,6 +287,7 @@ export async function fetchPokemon(
       attack: getStat(response.stats, 'attack'),
       specialAttack: getStat(response.stats, 'special-attack'),
       defense: getStat(response.stats, 'defense'),
+      specialDefense: getStat(response.stats, 'special-defense'),
       speed: getStat(response.stats, 'speed'),
     },
     captureRate: species.capture_rate,

@@ -40,6 +40,7 @@ export interface Pokemon {
     attack: number;
     specialAttack: number;
     defense: number;
+    specialDefense: number;
     speed: number;
   };
   captureRate: number;
@@ -88,6 +89,7 @@ export interface PlayerProfile {
   opponentCells: boolean[];
   opponentStatuses: (StatusEffect | null)[];
   opponentStatusFresh: boolean[];
+  opponentGridVersion: number;
   opponentMoves: string[];
   opponentMovesInitialized: boolean;
   pendingMoveUnlocks: PendingMoveUnlock[];

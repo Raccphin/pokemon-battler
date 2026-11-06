@@ -1,7 +1,12 @@
 # Feature: Type-specific opponent grid patterns
 
-- Continue to determine opponent grid size from HP, Defense, and Special Defense.
+- Calculate prototype grid bulk from level-adjusted stats using zero IVs, zero EVs, and neutral nature: HP is `floor(2 × base HP × level / 100) + level + 10`; Defense and Special Defense are each `floor(2 × base stat × level / 100) + 5`. Bulk is HP + half of Defense + half of Special Defense.
+- Every encounter uses an area-and-level baseline grid capacity, scaled by the Pokémon's level-adjusted bulk relative to a reference Pokémon with base HP, Defense, and Special Defense of 60. Interpolate capacity targets between these area milestones. Regular targets are 1 position in area 1, 16 in area 7, and 81 in area 10. Area-boss targets are 9 positions in area 1, 25 in area 7, and 144 in area 10. The actual number of HP blocks is half the scaled capacity, rounded up with a minimum of one. These are formula calibration points, not fixed Pokémon HP values.
+- Fill the calculated board positions using a deterministic arrangement pattern for the primary type. Normal uses compact row order; Fire a widening flame; Water alternating wave rows; Electric zigzag diagonals; Grass branching vines; Ice a center-out diamond; Fighting a center-out cross; Poison offset clusters; Ground bottom-up terraces; Flying a V; Psychic an inward spiral; Bug hexagonal clusters; Rock outer rings; Ghost a broken spiral; Dragon a spine with branches; Dark a crescent; Steel interlocking bands; and Fairy radial petals. Unused positions contain no HP block.
+- For a dual-type Pokémon, generate the primary type's pattern and rotate its occupied positions 180 degrees for the secondary type. This is deterministic and does not change HP block count.
+- Twelve rows and columns is a hard maximum, including for large stat-derived grids and Legendary or Mythical area-boss bonuses. A Legendary or Mythical area boss receives one additional row and column before applying that cap.
+- Type patterns affect only the initial spatial arrangement. They do not change HP, damage, capture chance, or type effectiveness.
 - Allow an opponent's type or types to modify the arrangement or behavior of its HP grid.
-- No type-specific rules are defined yet. Before implementation, propose a rule for each type and ask the user to clarify or approve the proposed rules.
-- Do not assume canonical type interactions or introduce unapproved rules.
+- No type-specific rules are approved yet. The prototype default is a neutral no-op grid modifier so the type hook remains in shared battle logic without affecting outcomes until the design is approved.
+- Future type rules should be proposed type-by-type and confirmed before they change battle behavior; do not assume canonical type interactions or introduce unapproved rules.
 - Keep approved rules in shared battle logic and preserve the separation between battle outcomes and presentation.

@@ -16,8 +16,20 @@ export const AREA_PROGRESSION_CONFIG = {
   bossOpponentLevelBonus: 1,
   specialBossChance: 0.5,
   bossAttackMultiplier: 1.25,
-  bossExtraRows: 1,
-  bossExtraColumns: 1,
+  bossGridMaxSide: 12,
+  gridReferenceBaseStat: 60,
+  regularGridBlockTargets: [
+    [1, 1],
+    [7, 16],
+    [10, 81],
+  ],
+  areaBossGridBlockTargets: [
+    [1, 9],
+    [7, 25],
+    [10, 144],
+  ],
+  specialBossGridExtraRows: 1,
+  specialBossGridExtraColumns: 1,
 } as const;
 
 export const AREAS: AreaDefinition[] = [
@@ -238,6 +250,32 @@ export function getPlayerProgressionLevel(
   return getProgressionLevel(areaNumber) + encounterLevelOffset;
 }
 
+export function getAreaGridTargetBlocks(
+  areaNumber: number,
+  isAreaBoss: boolean,
+): number {
+  const targets = isAreaBoss
+    ? AREA_PROGRESSION_CONFIG.areaBossGridBlockTargets
+    : AREA_PROGRESSION_CONFIG.regularGridBlockTargets;
+  const area = Math.max(1, areaNumber);
+
+  if (area <= targets[0][0]) return targets[0][1];
+  for (let index = 1; index < targets.length; index += 1) {
+    const [upperArea, upperBlocks] = targets[index];
+    const [lowerArea, lowerBlocks] = targets[index - 1];
+    if (area <= upperArea) {
+      const progress = (area - lowerArea) / (upperArea - lowerArea);
+      return Math.ceil(lowerBlocks + (upperBlocks - lowerBlocks) * progress);
+    }
+  }
+
+  return targets[targets.length - 1][1];
+}
+
+export function getOpponentGridHpBlockCount(boardCapacity: number): number {
+  return Math.max(1, Math.ceil(boardCapacity / 2));
+}
+
 export function getNextEncounterProgress(
   profile: Pick<PlayerProfile, "areaId" | "areaNumber" | "encounterIndex">,
   nextAreaId = profile.areaId,
@@ -266,4 +304,29 @@ export function chooseRandom<T>(
     Math.floor(randomValue * values.length),
   );
   return values[index];
+}
+
+export async function chooseRegularOpponentId(
+  pokemonIds: readonly number[],
+  excludedIds: readonly number[],
+  getClassification: (
+    pokemonId: number,
+  ) => Promise<{ isLegendary: boolean; isMythical: boolean }>,
+  random: () => number = Math.random,
+): Promise<number | undefined> {
+  const candidates = pokemonIds.filter((id) => !excludedIds.includes(id));
+
+  while (candidates.length > 0) {
+    const index = Math.min(
+      candidates.length - 1,
+      Math.floor(random() * candidates.length),
+    );
+    const [pokemonId] = candidates.splice(index, 1);
+    const classification = await getClassification(pokemonId);
+    if (!classification.isLegendary && !classification.isMythical) {
+      return pokemonId;
+    }
+  }
+
+  return undefined;
 }

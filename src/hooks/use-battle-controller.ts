@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   AREA_PROGRESSION_CONFIG,
   chooseRandom,
+  chooseRegularOpponentId,
   getAreaById,
   getNextEncounterProgress,
   getOpponentProgressionLevel,
@@ -17,11 +18,17 @@ import {
   getBallDetails,
   getBossAttack,
   getBossGridDimensions,
+  getBossGridHpBlockCount,
   getMoveLabel,
   getPlayerMaxHp,
   resolveStatusTurn,
 } from '@/services/battle-rules';
 import { getMovePattern, getPatternCells } from '@/services/move-patterns';
+import {
+  createOpponentGrid,
+  migrateOpponentGrid,
+  OPPONENT_GRID_LAYOUT_VERSION,
+} from '@/services/opponent-grid-patterns';
 import { rumble } from '@/services/haptics';
 import {
   fetchPokemon,
@@ -31,9 +38,12 @@ import {
 } from '@/services/pokeapi';
 import { chooseOpponentMoveNames, getInitialMoveNames } from '@/services/move-learning';
 import { usePlayer } from '@/providers/player-provider';
-import type { BallType, PokemonMove } from '@/types/game';
+import type { BallType, PokemonMove, StatusEffect } from '@/types/game';
 
 const sleep = (duration: number) => new Promise((resolve) => setTimeout(resolve, duration));
+const EMPTY_GRID_CELLS: boolean[] = [];
+const EMPTY_GRID_STATUSES: (StatusEffect | null)[] = [];
+const EMPTY_GRID_STATUS_FRESH: boolean[] = [];
 
 function randomCells(count: number, total: number): number[] {
   const cells = new Set<number>();
@@ -145,27 +155,76 @@ export function useBattleController() {
   const [catchAnimation, setCatchAnimation] = useState<{ positions: number[] } | null>(null);
   const playerPokemon = playerQuery.data;
   const bossPokemon = bossQuery.data;
-  const dimensions = bossPokemon
-    ? getBossGridDimensions(bossPokemon, profile?.opponentIsAreaBoss)
-    : null;
+  const opponentLevel = profile?.opponentLevel ?? 1;
+  const areaNumber = profile?.areaNumber ?? 1;
+  const isAreaBoss = profile?.opponentIsAreaBoss ?? false;
+  const isSpecialAreaBoss = Boolean(
+    isAreaBoss &&
+      profile?.usedSpecialBossIds.includes(profile.opponentId)
+  );
+  const dimensions = useMemo(
+    () =>
+      bossPokemon
+        ? getBossGridDimensions(
+            bossPokemon,
+            opponentLevel,
+            isAreaBoss,
+            areaNumber,
+            isSpecialAreaBoss
+          )
+        : null,
+    [areaNumber, bossPokemon, isAreaBoss, isSpecialAreaBoss, opponentLevel]
+  );
   const totalCells = dimensions ? dimensions.rows * dimensions.columns : 0;
-  const savedCells = profile?.opponentCells ?? [];
-  const savedStatuses = profile?.opponentStatuses ?? [];
-  const savedStatusFresh = profile?.opponentStatusFresh ?? [];
+  const totalHpBlocks = useMemo(
+    () =>
+      bossPokemon
+        ? getBossGridHpBlockCount(
+            bossPokemon,
+            opponentLevel,
+            areaNumber,
+            isAreaBoss
+          )
+        : 0,
+    [areaNumber, bossPokemon, isAreaBoss, opponentLevel]
+  );
+  const initialGridCells = useMemo(() =>
+    bossPokemon && dimensions
+      ? createOpponentGrid(bossPokemon.types, dimensions, totalHpBlocks)
+      : [],
+    [bossPokemon, dimensions, totalHpBlocks]
+  );
+  const savedCells = profile?.opponentCells ?? EMPTY_GRID_CELLS;
+  const savedStatuses = profile?.opponentStatuses ?? EMPTY_GRID_STATUSES;
+  const savedStatusFresh = profile?.opponentStatusFresh ?? EMPTY_GRID_STATUS_FRESH;
+  const migratedGrid = useMemo(
+    () =>
+      migrateOpponentGrid(
+        savedCells,
+        savedStatuses,
+        savedStatusFresh,
+        initialGridCells
+      ),
+    [initialGridCells, savedCells, savedStatuses, savedStatusFresh]
+  );
+  const gridStateMatches =
+    profile?.opponentGridVersion === OPPONENT_GRID_LAYOUT_VERSION &&
+    savedCells.length === totalCells &&
+    savedStatuses.length === totalCells &&
+    savedStatusFresh.length === totalCells;
 
   useEffect(() => {
     if (
       profile &&
       dimensions &&
-      (savedCells.length !== totalCells ||
-        savedStatuses.length !== totalCells ||
-        savedStatusFresh.length !== totalCells) &&
-      !profile.encounterComplete
+      !gridStateMatches
     ) {
       void updateOpponentGrid(
-        Array.from({ length: totalCells }, () => true),
-        Array.from({ length: totalCells }, () => null),
-        Array.from({ length: totalCells }, () => false)
+        migratedGrid.cells,
+        migratedGrid.statuses,
+        migratedGrid.statusFresh,
+        undefined,
+        OPPONENT_GRID_LAYOUT_VERSION
       ).catch((error: unknown) => {
         setMessage(
           error instanceof Error ? error.message : 'The boss grid could not be initialized.'
@@ -174,32 +233,32 @@ export function useBattleController() {
     }
   }, [
     dimensions,
+    gridStateMatches,
+    migratedGrid,
     profile,
-    savedCells.length,
-    savedStatuses.length,
-    savedStatusFresh.length,
+    savedCells,
+    savedStatuses,
+    savedStatusFresh,
     totalCells,
+    totalHpBlocks,
     updateOpponentGrid,
   ]);
 
-  const cells =
-    profile && dimensions
-      ? profile.opponentCells.length === totalCells
-        ? profile.opponentCells
-        : Array.from({ length: totalCells }, () => true)
-      : [];
-  const statuses =
-    profile && dimensions
-      ? profile.opponentStatuses.length === totalCells
-        ? profile.opponentStatuses
-        : Array.from({ length: totalCells }, () => null)
-      : [];
-  const statusFresh =
-    profile && dimensions
-      ? profile.opponentStatusFresh.length === totalCells
-        ? profile.opponentStatusFresh
-        : Array.from({ length: totalCells }, () => false)
-      : [];
+  const cells = profile && dimensions
+    ? gridStateMatches
+      ? savedCells
+      : migratedGrid.cells
+    : [];
+  const statuses = profile && dimensions
+    ? gridStateMatches
+      ? savedStatuses
+      : migratedGrid.statuses
+    : [];
+  const statusFresh = profile && dimensions
+    ? gridStateMatches
+      ? savedStatusFresh
+      : migratedGrid.statusFresh
+    : [];
   const selectedMove: PokemonMove | undefined =
     playerPokemon?.moves[selectedMoveIndex ?? -1];
   const movePatternContext = {
@@ -244,6 +303,7 @@ export function useBattleController() {
       profile.pendingMoveUnlocks.length === 0 &&
       currentHp > 0 &&
       bossRemaining > 0 &&
+      gridStateMatches &&
       cells.length === totalCells &&
       statuses.length === totalCells &&
       statusFresh.length === totalCells
@@ -319,7 +379,7 @@ export function useBattleController() {
           Math.random,
           profile.opponentIsAreaBoss,
           bossRemaining,
-          totalCells,
+          totalHpBlocks,
           profile.opponentLevel
         );
         if (!counterattack.move) {
@@ -355,7 +415,7 @@ export function useBattleController() {
     if (!profile || !bossPokemon || busy || profile.encounterComplete || !cells.some(Boolean)) {
       return;
     }
-    if (cells.every(Boolean)) {
+    if (bossRemaining === totalHpBlocks) {
       setMessage('Clear at least one boss-grid block before throwing a ball.');
       return;
     }
@@ -363,7 +423,7 @@ export function useBattleController() {
     const result = calculateCatchResult(
       bossPokemon.captureRate,
       bossRemaining,
-      totalCells,
+      totalHpBlocks,
       ballDetails.multiplier,
       Math.random()
     );
@@ -455,10 +515,9 @@ export function useBattleController() {
       const { opponentId, specialBossId } = next.isAreaBoss
         ? await chooseAreaBoss(nextArea.id, profile.usedSpecialBossIds)
         : {
-            opponentId: chooseRandom(
-              (await loadAreaPool(nextArea.id)).filter(
-                (id) => !profile.usedSpecialBossIds.includes(id)
-              )
+            opponentId: await chooseRegularOpponent(
+              nextArea.id,
+              profile.usedSpecialBossIds
             ),
             specialBossId: undefined,
           };
@@ -522,6 +581,21 @@ export function useBattleController() {
     });
   }
 
+  async function chooseRegularOpponent(
+    areaId: string,
+    excludedIds: number[]
+  ): Promise<number | undefined> {
+    return chooseRegularOpponentId(
+      await loadAreaPool(areaId),
+      excludedIds,
+      async (pokemonId) =>
+        queryClient.fetchQuery({
+          queryKey: ['pokemon-classification', pokemonId],
+          queryFn: () => fetchPokemonClassification(pokemonId),
+        })
+    );
+  }
+
   async function chooseAreaBoss(
     areaId: string,
     usedSpecialBossIds: number[]
@@ -548,8 +622,9 @@ export function useBattleController() {
       }
     }
 
-    const regularBossId = chooseRandom(
-      (await loadAreaPool(bossArea.id)).filter((id) => !usedSpecialBossIds.includes(id))
+    const regularBossId = await chooseRegularOpponent(
+      bossArea.id,
+      usedSpecialBossIds
     );
     return { opponentId: regularBossId, specialBossId: undefined };
   }
@@ -661,6 +736,8 @@ export function useBattleController() {
     dimensions,
     area,
     totalCells,
+    totalHpBlocks,
+    initialGridCells,
     cells,
     statuses,
     statusFresh,
