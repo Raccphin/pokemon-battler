@@ -9,7 +9,16 @@ import {
   persistPlayerProfile,
   resetPlayerSave,
 } from '@/services/player-database';
-import { getNextEncounterProgress } from '@/services/area-progression';
+import {
+  AREA_PROGRESSION_CONFIG,
+  getNextEncounterProgress,
+  getOpponentProgressionLevel,
+  getPlayerProgressionLevel,
+} from '@/services/area-progression';
+import {
+  finishRunIfDefeated,
+  replacePartyMemberWithCatch as replacePartyMember,
+} from '@/services/run-rules';
 import { awardEncounterReward, buyShopItem, SHOP_CONFIG } from '@/services/shop';
 import type { BallType, HealingItem, PartyMember, PlayerProfile, ShopItemKey } from '@/types/game';
 
@@ -20,6 +29,8 @@ type LoadState =
 
 interface PlayerContextValue {
   state: LoadState;
+  selectedMoveIndex: number | null;
+  setSelectedMoveIndex: (index: number | null) => void;
   operationError: string | null;
   clearOperationError: () => void;
   retry: () => void;
@@ -40,6 +51,7 @@ interface PlayerContextValue {
     pokemonId: number,
     maxHp: number
   ) => Promise<void>;
+  replacePartyMemberWithCatch: (slot: number) => Promise<void>;
   advanceEncounter: (
     opponentId: number,
     isAreaBoss: boolean,
@@ -49,6 +61,7 @@ interface PlayerContextValue {
   ) => Promise<void>;
   debugAdvanceToBoss: (opponentId: number, specialBossId?: number) => Promise<void>;
   debugHealParty: () => Promise<void>;
+  startNewRun: () => Promise<void>;
   debugWipeSaveData: () => Promise<void>;
 }
 
@@ -60,6 +73,7 @@ function getErrorMessage(error: unknown): string {
 
 export function PlayerProvider({ children }: React.PropsWithChildren) {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [selectedMoveIndex, setSelectedMoveIndex] = useState<number | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const databaseRef = useRef<SQLite.SQLiteDatabase | null>(null);
@@ -72,7 +86,11 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
       .then(async (database) => {
         if (!active) return;
         databaseRef.current = database;
-        const profile = await loadPlayerProfile(database);
+        const loadedProfile = await loadPlayerProfile(database);
+        const profile = finishRunIfDefeated(loadedProfile);
+        if (profile !== loadedProfile) {
+          await persistPlayerProfile(database, profile);
+        }
         if (!active) return;
         profileRef.current = profile;
         setState({ status: 'ready', profile });
@@ -91,6 +109,9 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
       const current = profileRef.current;
       if (!database || !current) {
         throw new Error('The player save is not ready yet.');
+      }
+      if (current.runStatus === 'gameOver') {
+        throw new Error('This run has ended. Start a new run to continue playing.');
       }
       const next = updater(current);
       await persistPlayerProfile(database, next);
@@ -136,7 +157,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
             ? { ...member, currentHp: Math.max(0, member.currentHp - damage) }
             : member
         );
-        return { ...profile, party };
+        return finishRunIfDefeated({ ...profile, party });
       }),
     [updateProfile]
   );
@@ -208,30 +229,52 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     (ball: BallType, success: boolean, pokemonId: number, maxHp: number) =>
       updateProfile((profile) => {
         if (profile.encounterComplete) throw new Error('This encounter is already complete.');
+        if (profile.pendingCatch) throw new Error('Choose a Pokémon to release before continuing.');
         const inventory = consumeBall(profile.inventory, ball);
         let party = profile.party;
+        let pendingCatch: PlayerProfile['pendingCatch'] = profile.pendingCatch;
         if (success) {
-          if (party.length >= 6) {
-            throw new Error('Your party is full. Switch or release a Pokémon before catching more.');
-          }
-          const usedSlots = new Set(party.map((member) => member.slot));
-          let slot = 0;
-          while (usedSlots.has(slot)) slot += 1;
-          const caught: PartyMember = {
-            slot,
+          const caught = {
             pokemonId,
             currentHp: maxHp,
             maxHp,
-            level: profile.opponentLevel,
+            level: getPlayerProgressionLevel(profile.areaNumber, profile.encounterIndex),
           };
-          party = [...party, caught];
+          if (party.length >= 6) {
+            pendingCatch = caught;
+          } else {
+            const usedSlots = new Set(party.map((member) => member.slot));
+            let slot = 0;
+            while (usedSlots.has(slot)) slot += 1;
+            party = [...party, { ...caught, slot }];
+          }
         }
-        const rewardedProfile = success ? awardEncounterReward({ ...profile, inventory, party, encounterComplete: true }) : { ...profile, inventory, party, encounterComplete: false };
+        const rewardedProfile = success
+          ? awardEncounterReward({
+              ...profile,
+              inventory,
+              party,
+              pendingCatch,
+              encounterComplete: true,
+            })
+          : { ...profile, inventory, party, encounterComplete: false };
         return {
           ...rewardedProfile,
           inventory: rewardedProfile.inventory,
           party: rewardedProfile.party,
+          pendingCatch: rewardedProfile.pendingCatch,
           encounterComplete: success,
+        };
+      }),
+    [updateProfile]
+  );
+
+  const replacePartyMemberWithCatch = useCallback(
+    (slot: number) =>
+      updateProfile((profile) => {
+        return {
+          ...profile,
+          ...replacePartyMember(profile.party, profile.pendingCatch, slot),
         };
       }),
     [updateProfile]
@@ -249,6 +292,9 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         if (!profile.encounterComplete) {
           throw new Error('Complete the current encounter before continuing.');
         }
+        if (profile.pendingCatch) {
+          throw new Error('Choose a Pokémon to release before continuing.');
+        }
         if (profile.shopProgress >= SHOP_CONFIG.encountersPerShop && !fromShop) {
           throw new Error('Visit the shop before continuing to the next encounter.');
         }
@@ -265,10 +311,14 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         const usedSpecialBossIds = specialBossId
           ? [...new Set([...profile.usedSpecialBossIds, specialBossId])]
           : profile.usedSpecialBossIds;
-        const party =
-          next.areaNumber > profile.areaNumber
-            ? profile.party.map((member) => ({ ...member, level: next.opponentLevel }))
-            : profile.party;
+        const playerLevel = getPlayerProgressionLevel(
+          next.areaNumber,
+          next.encounterIndex,
+        );
+        const party = profile.party.map((member) => ({
+          ...member,
+          level: playerLevel,
+        }));
         return {
           ...profile,
           opponentId,
@@ -301,12 +351,20 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         return {
           ...profile,
           opponentId,
+          opponentLevel: getOpponentProgressionLevel(
+            profile.areaNumber,
+            AREA_PROGRESSION_CONFIG.encountersPerArea - 1,
+          ),
           opponentIsAreaBoss: true,
           opponentCells: [],
           opponentStatuses: [],
           opponentStatusFresh: [],
           encounterComplete: false,
           encounterIndex: 9,
+          party: profile.party.map((member) => ({
+            ...member,
+            level: getPlayerProgressionLevel(profile.areaNumber, 9),
+          })),
           usedSpecialBossIds: specialBossId
             ? [...new Set([...profile.usedSpecialBossIds, specialBossId])]
             : profile.usedSpecialBossIds,
@@ -327,7 +385,7 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     [updateProfile]
   );
 
-  const debugWipeSaveData = useCallback(() => {
+  const resetRun = useCallback(() => {
     const operation = queueRef.current.then(async () => {
       const database = databaseRef.current;
       if (!database) {
@@ -342,6 +400,8 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     void operation.catch((error: unknown) => setOperationError(getErrorMessage(error)));
     return operation;
   }, []);
+  const startNewRun = resetRun;
+  const debugWipeSaveData = resetRun;
 
   const clearOperationError = useCallback(() => setOperationError(null), []);
   const retry = useCallback(() => {
@@ -354,6 +414,8 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
     <PlayerContext.Provider
       value={{
         state,
+        selectedMoveIndex,
+        setSelectedMoveIndex,
         operationError,
         clearOperationError,
         retry,
@@ -364,9 +426,11 @@ export function PlayerProvider({ children }: React.PropsWithChildren) {
         applyItem,
         purchaseItem,
         resolveCatch,
+        replacePartyMemberWithCatch,
         advanceEncounter,
         debugAdvanceToBoss,
         debugHealParty,
+        startNewRun,
         debugWipeSaveData,
       }}>
       {children}

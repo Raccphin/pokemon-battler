@@ -1,11 +1,13 @@
+import { useQueries } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenState } from '@/components/screen-state';
 import { ThemedText } from '@/components/themed-text';
 import { usePlayer } from '@/providers/player-provider';
+import { fetchPokemon } from '@/services/pokeapi';
 import type { BallType, HealingItem } from '@/types/game';
 
 const healingItems: { key: HealingItem; name: string; detail: string }[] = [
@@ -29,6 +31,15 @@ export default function BagScreen() {
   const { state, operationError, retry, applyItem, debugWipeSaveData } = usePlayer();
   const [selectedItem, setSelectedItem] = useState<HealingItem | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const party = state.status === 'ready' ? state.profile.party : [];
+  const pokemonQueries = useQueries({
+    queries: party.map((member) => ({
+      queryKey: ['pokemon', member.pokemonId],
+      queryFn: () => fetchPokemon(member.pokemonId),
+    })),
+  });
+  const pokemonNamesLoading = pokemonQueries.some((query) => query.isPending);
+  const pokemonNamesError = pokemonQueries.some((query) => query.error);
 
   if (state.status === 'loading') {
     return (
@@ -47,13 +58,16 @@ export default function BagScreen() {
   }
 
   const { profile } = state;
-  const party = profile.party;
 
   async function handleUseItem(item: HealingItem, slot: number) {
     try {
       await applyItem(item, slot);
-      setSelectedItem(null);
-      setMessage(`${item === 'potion' ? 'Potion' : 'Revive'} used.`);
+      const memberIndex = party.findIndex((member) => member.slot === slot);
+      const pokemonName = pokemonQueries[memberIndex]?.data?.name;
+      const name = pokemonName
+        ? pokemonName.charAt(0).toUpperCase() + pokemonName.slice(1)
+        : 'Pokémon';
+      setMessage(`${item === 'potion' ? 'Potion' : 'Revive'} used on ${name}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The item could not be used.');
     }
@@ -109,9 +123,34 @@ export default function BagScreen() {
             <ThemedText style={styles.sectionTitle}>
               CHOOSE A POKÉMON FOR {selectedItem.toUpperCase()}
             </ThemedText>
+            {pokemonNamesLoading ? (
+              <View style={styles.nameStatus}>
+                <ActivityIndicator size="small" color="#e65d43" />
+                <ThemedText style={styles.itemDetail}>Loading Pokémon names…</ThemedText>
+              </View>
+            ) : null}
+            {pokemonNamesError ? (
+              <View style={styles.nameStatus}>
+                <ThemedText style={styles.itemDetail}>
+                  Some Pokémon names could not be loaded.
+                </ThemedText>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    void Promise.all(pokemonQueries.map((query) => query.refetch()));
+                  }}
+                  style={styles.retryNamesButton}>
+                  <ThemedText style={styles.retryNamesText}>Retry names</ThemedText>
+                </Pressable>
+              </View>
+            ) : null}
             {party.some((member) => canUseItem(member, selectedItem)) ? (
-              party.map((member) => {
+              party.map((member, index) => {
                 const eligible = canUseItem(member, selectedItem);
+                const pokemon = pokemonQueries[index]?.data;
+                const pokemonName = pokemon
+                  ? pokemon.name.charAt(0).toUpperCase() + pokemon.name.slice(1)
+                  : 'Name unavailable';
                 return (
                   <Pressable
                     accessibilityRole="button"
@@ -119,8 +158,8 @@ export default function BagScreen() {
                     key={member.slot}
                     onPress={() => void handleUseItem(selectedItem, member.slot)}
                     style={[styles.partyRow, !eligible && styles.disabled]}>
-                    <View>
-                      <ThemedText style={styles.itemName}>Pokémon #{member.pokemonId}</ThemedText>
+                    <View style={styles.partyDetails}>
+                      <ThemedText style={styles.itemName}>{pokemonName}</ThemedText>
                       <ThemedText style={styles.itemDetail}>
                         {member.currentHp}/{member.maxHp} HP
                       </ThemedText>
@@ -243,6 +282,24 @@ const styles = StyleSheet.create({
   partySection: {
     gap: 8,
   },
+  nameStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  retryNamesButton: {
+    minHeight: 36,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: '#6f655e',
+  },
+  retryNamesText: {
+    color: '#fffaf0',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   partyRow: {
     minHeight: 54,
     paddingHorizontal: 13,
@@ -251,6 +308,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  partyDetails: {
+    flex: 1,
+    gap: 2,
   },
   useText: {
     color: '#e65d43',

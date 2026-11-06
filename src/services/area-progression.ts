@@ -12,6 +12,8 @@ export const AREA_PROGRESSION_CONFIG = {
   encountersPerArea: 10,
   startingLevel: 1,
   levelsPerArea: 5,
+  regularOpponentLevelsPerArea: 2,
+  bossOpponentLevelBonus: 1,
   specialBossChance: 0.5,
   bossAttackMultiplier: 1.25,
   bossExtraRows: 1,
@@ -205,6 +207,37 @@ export function getProgressionLevel(areaNumber: number): number {
   );
 }
 
+export function getOpponentProgressionLevel(
+  areaNumber: number,
+  encounterIndex: number,
+): number {
+  const regularEncounters = AREA_PROGRESSION_CONFIG.encountersPerArea - 1;
+  const lastRegularEncounterIndex = regularEncounters - 1;
+  const regularLevelOffset = Math.floor(
+    (Math.min(encounterIndex, lastRegularEncounterIndex) *
+      AREA_PROGRESSION_CONFIG.regularOpponentLevelsPerArea) /
+      lastRegularEncounterIndex,
+  );
+  const bossLevelOffset =
+    encounterIndex >= regularEncounters
+      ? AREA_PROGRESSION_CONFIG.bossOpponentLevelBonus
+      : 0;
+  return (
+    getProgressionLevel(areaNumber) + regularLevelOffset + bossLevelOffset
+  );
+}
+
+export function getPlayerProgressionLevel(
+  areaNumber: number,
+  encounterIndex: number,
+): number {
+  const encounterLevelOffset = Math.floor(
+    (encounterIndex * AREA_PROGRESSION_CONFIG.levelsPerArea) /
+      AREA_PROGRESSION_CONFIG.encountersPerArea,
+  );
+  return getProgressionLevel(areaNumber) + encounterLevelOffset;
+}
+
 export function getNextEncounterProgress(
   profile: Pick<PlayerProfile, "areaId" | "areaNumber" | "encounterIndex">,
   nextAreaId = profile.areaId,
@@ -217,7 +250,7 @@ export function getNextEncounterProgress(
     areaId: nextArea ? nextAreaId : profile.areaId,
     areaNumber,
     encounterIndex,
-    opponentLevel: getProgressionLevel(areaNumber),
+    opponentLevel: getOpponentProgressionLevel(areaNumber, encounterIndex),
     isAreaBoss:
       encounterIndex === AREA_PROGRESSION_CONFIG.encountersPerArea - 1,
   };

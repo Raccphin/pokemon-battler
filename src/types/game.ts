@@ -35,6 +35,17 @@ export interface PartyMember {
   level: number;
 }
 
+export type RunStatus = 'active' | 'gameOver';
+
+export interface RunSummary {
+  areaId: string;
+  areaNumber: number;
+  encounterIndex: number;
+  opponentLevel: number;
+  opponentIsAreaBoss: boolean;
+  party: PartyMember[];
+}
+
 export interface Inventory {
   pokeBall: number;
   greatBall: number;
@@ -63,6 +74,9 @@ export interface PlayerProfile {
   shopProgress: number;
   inventory: Inventory;
   party: PartyMember[];
+  runStatus: RunStatus;
+  runSummary: RunSummary | null;
+  pendingCatch: Omit<PartyMember, 'slot'> | null;
 }
 
 export type BallType = 'pokeBall' | 'greatBall' | 'ultraBall';

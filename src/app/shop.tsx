@@ -44,7 +44,10 @@ export default function ShopScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <ThemedText style={styles.eyebrow}>SHOP</ThemedText>
           <ThemedText style={styles.title}>Marketplace</ThemedText>
@@ -88,23 +91,6 @@ export default function ShopScreen() {
             <ThemedText style={styles.footerText}>
               Purchase items and heal before continuing your run.
             </ThemedText>
-            <Pressable
-              accessibilityRole="button"
-              disabled={battle.busy}
-              onPress={async () => {
-                if (await battle.startNewEncounter(true)) {
-                  router.replace('/');
-                }
-              }}
-              style={({ pressed }) => [
-                styles.continueButton,
-                battle.busy && styles.disabled,
-                pressed && styles.pressed,
-              ]}>
-              <ThemedText style={styles.continueButtonText}>
-                {battle.busy ? 'LOADING NEXT ENCOUNTER…' : 'CONTINUE TO NEXT ENCOUNTER'}
-              </ThemedText>
-            </Pressable>
             {battle.message && battle.message !== 'Choose a move to view its attack pattern.' ? (
               <ThemedText style={styles.footerText}>{battle.message}</ThemedText>
             ) : null}
@@ -115,6 +101,27 @@ export default function ShopScreen() {
           </ThemedText>
         )}
       </ScrollView>
+      {shopDue ? (
+        <View style={styles.stickyFooter}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={battle.busy}
+            onPress={async () => {
+              if (await battle.startNewEncounter(true)) {
+                router.replace('/');
+              }
+            }}
+            style={({ pressed }) => [
+              styles.continueButton,
+              battle.busy && styles.disabled,
+              pressed && !battle.busy && styles.pressed,
+            ]}>
+            <ThemedText style={styles.continueButtonText}>
+              {battle.busy ? 'LOADING NEXT ENCOUNTER…' : 'CONTINUE TO NEXT ENCOUNTER'}
+            </ThemedText>
+          </Pressable>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -124,13 +131,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f1e7',
   },
+  scroll: {
+    flex: 1,
+  },
   content: {
     width: '100%',
     maxWidth: 560,
     alignSelf: 'center',
     paddingHorizontal: 16,
     paddingTop: 18,
-    paddingBottom: 24,
+    paddingBottom: 18,
     gap: 14,
   },
   header: {
@@ -217,6 +227,14 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: '#e65d43',
     paddingHorizontal: 16,
+  },
+  stickyFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e8dfd2',
+    backgroundColor: '#f5f1e7',
   },
   continueButtonText: {
     color: '#fffaf0',

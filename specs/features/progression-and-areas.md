@@ -1,7 +1,7 @@
 # Feature: Progression and areas
 
 - Choose an area at random for a run and choose a new area at random after each area boss. Areas may repeat; progression has no fixed final area.
-- Show the current area, area number, encounter number, and a progress bar at the top of the battle screen.
+- Show the current area, area number, encounter number, and a progress bar at the top of the battle screen. Progress represents the current encounter stage: encounter 1 of 10 shows 10%, and encounter 10 of 10 shows 100%.
 - Show the matching area illustration behind the Pokémon in the battle arena, blurred and cover-fitted so it fills the available arena width and height.
 - Each area has a PokeAPI type pool. Regular encounters are selected from Pokémon matching at least one of the area's favored types:
   - Forest: Grass, Bug, Fairy
@@ -26,7 +26,8 @@
   - Ancient Ruins: Ghost, Psychic, Steel
   - Dojo: Fighting, Psychic, Steel
 - Each area has 10 encounter stages. The tenth is the area boss; the two future shop positions temporarily spawn regular Pokémon encounters.
-- Start at level 1 and increase the level by 5 when entering each new area. Apply the current area level to the player's party and opponents.
+- Opponent area starting levels start at 1 and increase by 5 when entering each new area. Within an area, regular opponents gain two levels spread across the nine regular encounter stages; the area's boss is one level above the last regular encounter. The next area's first opponent is two levels above the previous area's boss, keeping area starts five levels apart.
+- Player Pokémon start at level 1 and gain five levels distributed across each area's 10 encounter stages. Set the party's level to the current stage's player level when advancing to an encounter, including after leaving the shop.
 - Area bosses use the same encounter and battle rules as other Pokémon, with a 25% chance to be a type-matching legendary or mythical. Bosses have 25% increased Attack and one extra row and column in their HP grid.
 - A legendary or mythical selected as an area boss is recorded immediately and cannot appear again later in the run, whether or not it is caught.
 - Persist area identity, area number, encounter stage, opponent level and boss status, grid progress, and used special-boss IDs in SQLite.

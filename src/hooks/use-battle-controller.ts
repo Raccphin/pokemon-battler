@@ -47,12 +47,15 @@ export function useBattleController() {
   const queryClient = useQueryClient();
   const {
     state,
+    selectedMoveIndex,
+    setSelectedMoveIndex,
     operationError,
     clearOperationError,
     retry,
     updateOpponentGrid,
     damageActivePokemon,
     resolveCatch,
+    replacePartyMemberWithCatch,
     advanceEncounter,
     debugAdvanceToBoss,
     debugHealParty,
@@ -80,7 +83,6 @@ export function useBattleController() {
     enabled: bossId !== undefined,
   });
   const area = profile ? getAreaById(profile.areaId) : null;
-  const [selectedMoveIndex, setSelectedMoveIndex] = useState<number | null>(null);
   const [round, setRound] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('Choose a move to view its attack pattern.');
@@ -155,7 +157,9 @@ export function useBattleController() {
     !busy &&
       profile &&
       dimensions &&
+      profile.runStatus === 'active' &&
       !profile.encounterComplete &&
+      !profile.pendingCatch &&
       currentHp > 0 &&
       bossRemaining > 0 &&
       cells.length === totalCells &&
@@ -249,10 +253,6 @@ export function useBattleController() {
       setMessage('Clear at least one boss-grid block before throwing a ball.');
       return;
     }
-    if (profile.party.length >= 6) {
-      setMessage('Your party is full. Make room before trying to catch this Pokémon.');
-      return;
-    }
     const ballDetails = getBallDetails(ball);
     const result = calculateCatchResult(
       bossPokemon.captureRate,
@@ -296,7 +296,9 @@ export function useBattleController() {
       }
       setMessage(
         result.success
-          ? `${capitalize(bossPokemon.name)} was caught and added to your party!`
+          ? profile.party.length >= 6
+            ? `${capitalize(bossPokemon.name)} was caught. Choose a teammate to release and make room.`
+            : `${capitalize(bossPokemon.name)} was caught and added to your party!`
           : `${capitalize(bossPokemon.name)} broke free. Try again after clearing more blocks.`
       );
       await sleep(500);
@@ -306,6 +308,15 @@ export function useBattleController() {
       setCatchAnimation(null);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function replacePartyMember(slot: number) {
+    try {
+      await replacePartyMemberWithCatch(slot);
+      setMessage('Your new Pokémon joined the party.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The party could not be updated.');
     }
   }
 
@@ -501,6 +512,7 @@ export function useBattleController() {
     setMessage,
     attackMove: performMove,
     handleCatch,
+    replacePartyMember,
     startNewEncounter,
     debugDefeatCurrent,
     debugGoToAreaBoss,

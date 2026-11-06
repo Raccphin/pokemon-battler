@@ -4,6 +4,7 @@
 
 - Healing items target a selected party member and cannot heal a fainted Pokémon.
 - Revives target a selected fainted party member.
+- Show party Pokémon by name in the healing-item picker. Keep the selected item and picker open after use so the player can use multiple items; refresh HP and eligibility after each use.
 - Validate item availability and target eligibility before consuming an item; persist inventory and HP changes together.
 - Provide the bag as a bottom-navigation screen alongside battle and party.
 - Selecting a Poké Ball navigates to battle and closes the bag before showing the catch animation.

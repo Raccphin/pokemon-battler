@@ -1,3 +1,4 @@
+import { useQueries } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,6 +14,7 @@ import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
 import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
 import { getMoveLabel } from '@/services/battle-rules';
 import { SHOP_CONFIG } from '@/services/shop';
+import { fetchPokemon } from '@/services/pokeapi';
 import type { PokemonMove } from '@/types/game';
 import { router, useLocalSearchParams, usePathname } from 'expo-router';
 
@@ -24,6 +26,14 @@ export default function BattleScreen() {
   const gridRef = useRef<React.ElementRef<typeof View>>(null);
   const [confirmWipeSave, setConfirmWipeSave] = useState(false);
   const battle = useBattleController();
+  const replacementQueries = useQueries({
+    queries: battle.profile?.pendingCatch
+      ? battle.profile.party.map((member) => ({
+          queryKey: ['pokemon', member.pokemonId],
+          queryFn: () => fetchPokemon(member.pokemonId),
+        }))
+      : [],
+  });
   const pathname = usePathname();
   const { throwBall } = useLocalSearchParams<{ throwBall?: string | string[] }>();
   const handledThrow = useRef<string | null>(null);
@@ -56,6 +66,7 @@ export default function BattleScreen() {
     const shopProgress = battle.profile?.shopProgress;
     const shouldOpenShop =
       battle.profile?.encounterComplete &&
+      !battle.profile.pendingCatch &&
       shopProgress !== undefined &&
       shopProgress >= SHOP_CONFIG.encountersPerShop;
 
@@ -79,6 +90,7 @@ export default function BattleScreen() {
     battle.busy,
     battle.catchAnimation,
     battle.profile?.encounterComplete,
+    battle.profile?.pendingCatch,
     battle.profile?.shopProgress,
     pathname,
   ]);
@@ -179,9 +191,18 @@ export default function BattleScreen() {
   const dimensions = dimensionsCandidate;
 
   const hpPercent = Math.max(0, Math.min(100, (activeMember.currentHp / activeMember.maxHp) * 100));
-  const completedEncounters = profile.encounterIndex + Number(profile.encounterComplete);
+  const encounterNumber = profile.encounterIndex + 1;
   const areaProgress =
-    (completedEncounters / AREA_PROGRESSION_CONFIG.encountersPerArea) * 100;
+    (encounterNumber / AREA_PROGRESSION_CONFIG.encountersPerArea) * 100;
+  const shopDue = profile.shopProgress >= SHOP_CONFIG.encountersPerShop;
+
+  function continueAfterDefeat() {
+    if (shopDue) {
+      router.replace('../shop');
+      return;
+    }
+    void battle.startNewEncounter();
+  }
 
   function dropMove(move: PokemonMove, x: number, y: number) {
     if (!battle.canBattle) return;
@@ -232,7 +253,7 @@ export default function BattleScreen() {
             accessibilityValue={{
               min: 0,
               max: AREA_PROGRESSION_CONFIG.encountersPerArea,
-              now: completedEncounters,
+              now: encounterNumber,
             }}
             style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${areaProgress}%` }]} />
@@ -295,53 +316,79 @@ export default function BattleScreen() {
               <Text style={styles.blocksPillText}>GRID HEALTH</Text>
             </View>
           </View>
-          <View ref={gridRef} collapsable={false} style={styles.grid}>
-            {Array.from({ length: dimensions.rows }, (_, row) => (
-              <View key={`row-${row}`} style={styles.gridRow}>
-                {Array.from({ length: dimensions.columns }, (_, column) => {
-                  const index = row * dimensions.columns + column;
-                  const active = battle.cells[index];
-                  const status = battle.statuses[index];
-                  const statusPresentation = status
-                    ? STATUS_EFFECT_PRESENTATION[status]
-                    : null;
-                  const ball = battle.catchAnimation?.positions.includes(index) ?? false;
-                  return (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Boss grid row ${row + 1}, column ${column + 1}, ${statusPresentation ? `${statusPresentation.label} status, ${active ? 'occupied' : 'cleared'}` : active ? 'occupied' : 'cleared'}`}
-                      disabled={battle.busy || !battle.canBattle || !battle.selectedMove}
-                      key={index}
-                      onPress={() => battle.handleGridCell(row, column)}
-                      style={[
-                        styles.gridCell,
-                        active ? styles.gridCellActive : styles.gridCellCleared,
-                        statusPresentation && {
-                          backgroundColor: statusPresentation.color,
-                        },
-                        ball && styles.gridCellBall,
-                      ]}>
-                      {ball ? (
-                        <Text style={styles.ballGlyph}>●</Text>
-                      ) : statusPresentation ? (
-                        <Image
-                          contentFit="contain"
-                          source={statusPresentation.icon}
-                          style={styles.gridCellStatusIcon}
-                        />
-                      ) : active ? (
-                        <View style={styles.cellDot} />
-                      ) : (
-                        <View style={styles.emptyDot} />
-                      )}
-                    </Pressable>
-                  );
-                })}
+          <View style={styles.gridStage}>
+            <View ref={gridRef} collapsable={false} style={styles.grid}>
+              {Array.from({ length: dimensions.rows }, (_, row) => (
+                <View key={`row-${row}`} style={styles.gridRow}>
+                  {Array.from({ length: dimensions.columns }, (_, column) => {
+                    const index = row * dimensions.columns + column;
+                    const active = battle.cells[index];
+                    const status = battle.statuses[index];
+                    const statusPresentation = status
+                      ? STATUS_EFFECT_PRESENTATION[status]
+                      : null;
+                    const ball = battle.catchAnimation?.positions.includes(index) ?? false;
+                    return (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Boss grid row ${row + 1}, column ${column + 1}, ${statusPresentation ? `${statusPresentation.label} status, ${active ? 'occupied' : 'cleared'}` : active ? 'occupied' : 'cleared'}`}
+                        disabled={battle.busy || !battle.canBattle || !battle.selectedMove}
+                        key={index}
+                        onPress={() => battle.handleGridCell(row, column)}
+                        style={[
+                          styles.gridCell,
+                          active ? styles.gridCellActive : styles.gridCellCleared,
+                          statusPresentation && {
+                            backgroundColor: statusPresentation.color,
+                          },
+                          ball && styles.gridCellBall,
+                        ]}>
+                        {ball ? (
+                          <Text style={styles.ballGlyph}>●</Text>
+                        ) : statusPresentation ? (
+                          <Image
+                            contentFit="contain"
+                            source={statusPresentation.icon}
+                            style={styles.gridCellStatusIcon}
+                          />
+                        ) : active ? (
+                          <View style={styles.cellDot} />
+                        ) : (
+                          <View style={styles.emptyDot} />
+                        )}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+            {battle.bossDefeated && !profile.pendingCatch ? (
+              <View style={styles.gridContinueOverlay}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={battle.busy}
+                  onPress={continueAfterDefeat}
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    styles.gridContinueButton,
+                    battle.busy && styles.disabledButton,
+                    pressed && !battle.busy && styles.pressed,
+                  ]}>
+                  <Text style={styles.primaryButtonText}>
+                    {battle.busy
+                      ? 'LOADING…'
+                      : shopDue
+                        ? 'CONTINUE TO SHOP'
+                        : 'CONTINUE RUN'}
+                  </Text>
+                </Pressable>
               </View>
-            ))}
+            ) : null}
           </View>
           <ThemedText style={styles.gridHint}>
-            {battle.catchAnimation
+            {battle.bossDefeated
+              ? 'Opponent defeated.'
+              : battle.catchAnimation
               ? 'Wobble…'
               : 'Tap a move to view its pattern, then drag it here or tap a target cell.'}
           </ThemedText>
@@ -355,7 +402,57 @@ export default function BattleScreen() {
           </View>
         )}
 
-        {profile.encounterComplete ? (
+        {profile.pendingCatch ? (
+          <View style={styles.replacementCard}>
+            <ThemedText style={styles.sectionTitle}>MAKE ROOM FOR YOUR NEW CATCH</ThemedText>
+            <ThemedText style={styles.replacementHint}>
+              Choose a teammate to release and replace with {capitalize(bossPokemon.name)}.
+              This choice is saved if you leave the screen.
+            </ThemedText>
+            {replacementQueries.some((query) => query.error) ? (
+              <View style={styles.replacementError}>
+                <ThemedText style={styles.replacementHint}>
+                  Some Pokémon names could not be loaded. You can still choose by ID.
+                </ThemedText>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    void Promise.all(replacementQueries.map((query) => query.refetch()));
+                  }}
+                  style={styles.retryNamesButton}>
+                  <Text style={styles.retryNamesText}>Retry names</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {profile.party.map((member, index) => {
+              const pokemon = replacementQueries[index]?.data;
+              const label = pokemon
+                ? capitalize(pokemon.name)
+                : `Pokémon #${member.pokemonId}`;
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Release ${label} and add ${capitalize(bossPokemon.name)}`}
+                  disabled={battle.busy}
+                  key={member.slot}
+                  onPress={() => void battle.replacePartyMember(member.slot)}
+                  style={({ pressed }) => [
+                    styles.replacementButton,
+                    battle.busy && styles.debugButtonDisabled,
+                    pressed && styles.pressed,
+                  ]}>
+                  <Text style={styles.replacementButtonText}>
+                    Release {label} · Lv. {member.level}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
+
+        {profile.encounterComplete &&
+        !profile.pendingCatch &&
+        !battle.bossDefeated ? (
           <Pressable
             accessibilityRole="button"
             disabled={battle.busy || profile.shopProgress >= SHOP_CONFIG.encountersPerShop}
@@ -701,6 +798,21 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     backgroundColor: '#f1eee8',
   },
+  gridStage: {
+    position: 'relative',
+  },
+  gridContinueOverlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 13,
+    backgroundColor: 'rgba(255, 250, 240, 0.78)',
+  },
+  gridContinueButton: {
+    width: '100%',
+    maxWidth: 280,
+  },
   gridRow: {
     flexDirection: 'row',
     gap: 4,
@@ -783,6 +895,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: '#e65d43',
   },
+  disabledButton: {
+    opacity: 0.55,
+  },
   primaryButtonText: {
     color: '#ffffff',
     fontSize: 12,
@@ -808,6 +923,48 @@ const styles = StyleSheet.create({
     borderColor: '#e5c7a6',
     backgroundColor: '#fff8ed',
     gap: 10,
+  },
+  replacementCard: {
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: '#fff8ed',
+    borderWidth: 1,
+    borderColor: '#e5c7a6',
+    gap: 9,
+  },
+  replacementHint: {
+    color: '#716d65',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  replacementError: {
+    gap: 6,
+  },
+  retryNamesButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: '#6f655e',
+  },
+  retryNamesText: {
+    color: '#fffaf0',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  replacementButton: {
+    minHeight: 44,
+    borderRadius: 11,
+    backgroundColor: '#8a513d',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  replacementButtonText: {
+    color: '#fffaf0',
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   debugHeader: {
     flexDirection: 'row',

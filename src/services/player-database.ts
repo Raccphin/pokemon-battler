@@ -6,6 +6,8 @@ import type {
   Inventory,
   PartyMember,
   PlayerProfile,
+  RunStatus,
+  RunSummary,
   StatusEffect,
 } from "@/types/game";
 
@@ -27,6 +29,9 @@ interface SaveRow {
   used_special_boss_ids: string;
   money: number;
   shop_progress: number;
+  run_status: string;
+  run_summary: string;
+  pending_catch: string;
   poke_balls: number;
   great_balls: number;
   ultra_balls: number;
@@ -123,8 +128,102 @@ function parseIds(value: string): number[] {
   return parsed;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function isPartyMember(value: unknown): value is PartyMember {
+  return (
+    isRecord(value) &&
+    isNonNegativeInteger(value.slot) &&
+    isPositiveInteger(value.pokemonId) &&
+    isNonNegativeInteger(value.currentHp) &&
+    isPositiveInteger(value.maxHp) &&
+    value.currentHp <= value.maxHp &&
+    isPositiveInteger(value.level)
+  );
+}
+
+function parseRunStatus(value: string): RunStatus {
+  if (value === "active" || value === "gameOver") return value;
+  throw new Error("The saved run status is invalid. The save could not be loaded.");
+}
+
+function parseRunSummary(value: string): RunSummary | null {
+  const parsed: unknown = JSON.parse(value);
+  if (parsed === null) return null;
+  if (!isRecord(parsed)) {
+    throw new Error("The saved game-over summary is invalid. The save could not be loaded.");
+  }
+  const {
+    areaId,
+    areaNumber,
+    encounterIndex,
+    opponentLevel,
+    opponentIsAreaBoss,
+    party,
+  } = parsed;
+  if (
+    typeof areaId !== "string" ||
+    areaId.length === 0 ||
+    !isPositiveInteger(areaNumber) ||
+    !isNonNegativeInteger(encounterIndex) ||
+    !isPositiveInteger(opponentLevel) ||
+    typeof opponentIsAreaBoss !== "boolean" ||
+    !Array.isArray(party) ||
+    !party.every(isPartyMember)
+  ) {
+    throw new Error("The saved game-over summary is invalid. The save could not be loaded.");
+  }
+  return {
+    areaId,
+    areaNumber,
+    encounterIndex,
+    opponentLevel,
+    opponentIsAreaBoss,
+    party: party.map((member) => ({ ...member })),
+  };
+}
+
+function parsePendingCatch(value: string): Omit<PartyMember, "slot"> | null {
+  const parsed: unknown = JSON.parse(value);
+  if (parsed === null) return null;
+  if (!isRecord(parsed)) {
+    throw new Error("The saved pending catch is invalid. The save could not be loaded.");
+  }
+  const { pokemonId, currentHp, maxHp, level } = parsed;
+  if (
+    !isPositiveInteger(pokemonId) ||
+    !isNonNegativeInteger(currentHp) ||
+    !isPositiveInteger(maxHp) ||
+    currentHp > maxHp ||
+    !isPositiveInteger(level)
+  ) {
+    throw new Error("The saved pending catch is invalid. The save could not be loaded.");
+  }
+  return {
+    pokemonId,
+    currentHp,
+    maxHp,
+    level,
+  };
+}
+
 function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
   const opponentCells = parseCells(save.opponent_cells);
+  const runStatus = parseRunStatus(save.run_status);
+  const runSummary = parseRunSummary(save.run_summary);
+  if ((runStatus === "gameOver") !== (runSummary !== null)) {
+    throw new Error("The saved run summary does not match its status. The save could not be loaded.");
+  }
   return {
     starterSelected: Boolean(save.starter_selected),
     activeSlot: save.active_slot,
@@ -161,6 +260,9 @@ function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
       maxHp: member.max_hp,
       level: member.level,
     })),
+    runStatus,
+    runSummary,
+    pendingCatch: parsePendingCatch(save.pending_catch),
   };
 }
 
@@ -184,6 +286,9 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
       used_special_boss_ids TEXT NOT NULL DEFAULT '[]',
       money INTEGER NOT NULL DEFAULT 0,
       shop_progress INTEGER NOT NULL DEFAULT 0,
+      run_status TEXT NOT NULL DEFAULT 'active',
+      run_summary TEXT NOT NULL DEFAULT 'null',
+      pending_catch TEXT NOT NULL DEFAULT 'null',
       poke_balls INTEGER NOT NULL,
       great_balls INTEGER NOT NULL,
       ultra_balls INTEGER NOT NULL,
@@ -214,6 +319,9 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
     ["used_special_boss_ids", "TEXT NOT NULL DEFAULT '[]'"],
     ["money", "INTEGER NOT NULL DEFAULT 0"],
     ["shop_progress", "INTEGER NOT NULL DEFAULT 0"],
+    ["run_status", "TEXT NOT NULL DEFAULT 'active'"],
+    ["run_summary", "TEXT NOT NULL DEFAULT 'null'"],
+    ["pending_catch", "TEXT NOT NULL DEFAULT 'null'"],
   ];
   for (const [name, definition] of migrations) {
     if (!columnNames.has(name)) {
@@ -270,8 +378,8 @@ export async function persistPlayerProfile(
        starter_selected = ?, opponent_is_area_boss = ?, opponent_cells = ?, opponent_statuses = ?, opponent_status_fresh = ?,
        encounter_complete = ?, area_id = ?,
        area_number = ?, encounter_index = ?, used_special_boss_ids = ?, money = ?,
-       shop_progress = ?, poke_balls = ?, great_balls = ?, ultra_balls = ?, potions = ?,
-       revives = ? WHERE id = 1`,
+       shop_progress = ?, run_status = ?, run_summary = ?, pending_catch = ?,
+       poke_balls = ?, great_balls = ?, ultra_balls = ?, potions = ?, revives = ? WHERE id = 1`,
       profile.activeSlot,
       profile.opponentId,
       profile.opponentLevel,
@@ -287,6 +395,9 @@ export async function persistPlayerProfile(
       JSON.stringify(profile.usedSpecialBossIds),
       profile.money,
       profile.shopProgress,
+      profile.runStatus,
+      JSON.stringify(profile.runSummary),
+      JSON.stringify(profile.pendingCatch),
       profile.inventory.pokeBall,
       profile.inventory.greatBall,
       profile.inventory.ultraBall,
@@ -319,6 +430,7 @@ export async function resetPlayerSave(
        opponent_statuses = '[]', opponent_status_fresh = '[]',
        encounter_complete = 0, area_id = ?, area_number = 1, encounter_index = 0,
        used_special_boss_ids = '[]', money = 0, shop_progress = 0,
+       run_status = 'active', run_summary = 'null', pending_catch = 'null',
        poke_balls = 5, great_balls = 2, ultra_balls = 1, potions = 3, revives = 1
        WHERE id = 1`,
       initialArea.startingPokemonId,

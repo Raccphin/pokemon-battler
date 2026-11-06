@@ -12,6 +12,7 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="starter-selection" />
             <Stack.Screen name="shop" />
+            <Stack.Screen name="game-over" />
           </Stack>
         </ThemeProvider>
       </PlayerProvider>

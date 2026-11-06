@@ -12,6 +12,7 @@
 - Determine attack size from the attacking Pokémon's Attack or Special Attack stat, as appropriate for that Pokémon. Determine the pattern shape from move power. The exact mapping is undecided and must not be hard-coded as a balance rule without direction.
 - After a player attack that does not defeat or catch the boss, the boss responds with one of its PokeAPI moves and damages the active Pokémon.
 - When all boss blocks are removed, mark the boss defeated and stop further attacks.
+- Once the boss is defeated, show the continue action over the cleared grid instead of below the battle content. If the shop is due, the action continues to the shop.
 
 ## Status effects
 
