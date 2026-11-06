@@ -10,12 +10,15 @@ import {
 } from '@/services/area-progression';
 import {
   calculateCatchResult,
+  applyMovePattern,
+  doesMoveHit,
   getBallDetails,
   getBossAttack,
   getBossGridDimensions,
   getMoveLabel,
   getPatternCells,
   getPlayerMaxHp,
+  resolveStatusTurn,
 } from '@/services/battle-rules';
 import { rumble } from '@/services/haptics';
 import {
@@ -47,7 +50,7 @@ export function useBattleController() {
     operationError,
     clearOperationError,
     retry,
-    updateOpponentCells,
+    updateOpponentGrid,
     damageActivePokemon,
     resolveCatch,
     advanceEncounter,
@@ -89,25 +92,55 @@ export function useBattleController() {
     : null;
   const totalCells = dimensions ? dimensions.rows * dimensions.columns : 0;
   const savedCells = profile?.opponentCells ?? [];
+  const savedStatuses = profile?.opponentStatuses ?? [];
+  const savedStatusFresh = profile?.opponentStatusFresh ?? [];
 
   useEffect(() => {
     if (
       profile &&
       dimensions &&
-      savedCells.length !== totalCells &&
+      (savedCells.length !== totalCells ||
+        savedStatuses.length !== totalCells ||
+        savedStatusFresh.length !== totalCells) &&
       !profile.encounterComplete
     ) {
-      void updateOpponentCells(Array.from({ length: totalCells }, () => true)).catch(
-        () => undefined
-      );
+      void updateOpponentGrid(
+        Array.from({ length: totalCells }, () => true),
+        Array.from({ length: totalCells }, () => null),
+        Array.from({ length: totalCells }, () => false)
+      ).catch((error: unknown) => {
+        setMessage(
+          error instanceof Error ? error.message : 'The boss grid could not be initialized.'
+        );
+      });
     }
-  }, [dimensions, profile, savedCells.length, totalCells, updateOpponentCells]);
+  }, [
+    dimensions,
+    profile,
+    savedCells.length,
+    savedStatuses.length,
+    savedStatusFresh.length,
+    totalCells,
+    updateOpponentGrid,
+  ]);
 
   const cells =
     profile && dimensions
       ? profile.opponentCells.length === totalCells
         ? profile.opponentCells
         : Array.from({ length: totalCells }, () => true)
+      : [];
+  const statuses =
+    profile && dimensions
+      ? profile.opponentStatuses.length === totalCells
+        ? profile.opponentStatuses
+        : Array.from({ length: totalCells }, () => null)
+      : [];
+  const statusFresh =
+    profile && dimensions
+      ? profile.opponentStatusFresh.length === totalCells
+        ? profile.opponentStatusFresh
+        : Array.from({ length: totalCells }, () => false)
       : [];
   const selectedMove: PokemonMove | undefined =
     playerPokemon?.moves[selectedMoveIndex ?? -1];
@@ -125,7 +158,9 @@ export function useBattleController() {
       !profile.encounterComplete &&
       currentHp > 0 &&
       bossRemaining > 0 &&
-      cells.length === totalCells
+      cells.length === totalCells &&
+      statuses.length === totalCells &&
+      statusFresh.length === totalCells
   );
   async function performMove(move: PokemonMove, row: number, column: number) {
     if (!canBattle || !dimensions || !profile || !bossPokemon) return;
@@ -138,20 +173,64 @@ export function useBattleController() {
 
     setBusy(true);
     clearOperationError();
-    const nextCells = cells.map((cell, index) => (hitCells.includes(index) ? false : cell));
-    const defeated = nextCells.every((cell) => !cell);
     try {
-      await updateOpponentCells(nextCells, defeated);
+      const moveHits = doesMoveHit(move);
+      const attackedGrid = moveHits
+        ? applyMovePattern(cells, statuses, statusFresh, hitCells, move)
+        : { cells, statuses, statusFresh };
+      const statusTurn = attackedGrid.cells.some(Boolean)
+        ? resolveStatusTurn(
+            attackedGrid.cells,
+            attackedGrid.statuses,
+            dimensions,
+            attackedGrid.statusFresh
+          )
+        : {
+            cells: attackedGrid.cells,
+            statuses: attackedGrid.statuses,
+            statusFresh: attackedGrid.statusFresh,
+            opponentSkipped: false,
+          };
+      const nextCells = statusTurn.cells;
+      const defeated = nextCells.every((cell) => !cell);
+      const clearedByStatuses =
+        attackedGrid.cells.filter(Boolean).length - nextCells.filter(Boolean).length;
+      const clearedByMove =
+        cells.filter(Boolean).length - attackedGrid.cells.filter(Boolean).length;
+      const moveMessage = moveHits
+        ? `${getMoveLabel(move.name)} cleared ${clearedByMove} block(s).`
+        : `${getMoveLabel(move.name)} missed.`;
+      await updateOpponentGrid(
+        nextCells,
+        statusTurn.statuses,
+        statusTurn.statusFresh,
+        defeated
+      );
       rumble();
       if (defeated) {
         setMessage(`${capitalize(bossPokemon.name)} fainted! The raid is complete.`);
+      } else if (statusTurn.opponentSkipped) {
+        setRound((turn) => turn + 1);
+        const statusTiles = statusTurn.statuses.filter(
+          (status, index) =>
+            statusTurn.cells[index] &&
+            (status === 'freeze' || status === 'paralysis' || status === 'sleep')
+        ).length;
+        const statusMessage =
+          clearedByStatuses > 0
+            ? ` ${clearedByStatuses} additional block(s) were cleared by status effects.`
+            : '';
+        setMessage(
+          `${moveMessage}${statusMessage} ${capitalize(bossPokemon.name)} skipped its turn because of ${statusTiles} stalling status tile(s).`
+        );
       } else {
         const counterattack = getBossAttack(bossPokemon, round, profile.opponentIsAreaBoss);
         await damageActivePokemon(counterattack.damage);
         rumble();
         setRound((turn) => turn + 1);
         setMessage(
-          `${getMoveLabel(move.name)} cleared ${hitCells.filter((index) => cells[index]).length} block(s). ` +
+          `${moveMessage} ` +
+            `${clearedByStatuses > 0 ? `${clearedByStatuses} additional block(s) were cleared by status effects. ` : ''}` +
             `${capitalize(bossPokemon.name)} used ${getMoveLabel(counterattack.move.name)} for ${counterattack.damage} damage.`
         );
       }
@@ -310,7 +389,12 @@ export function useBattleController() {
     try {
       setBusy(true);
       clearOperationError();
-      await updateOpponentCells(Array.from({ length: totalCells }, () => false), true);
+      await updateOpponentGrid(
+        Array.from({ length: totalCells }, () => false),
+        Array.from({ length: totalCells }, () => null),
+        Array.from({ length: totalCells }, () => false),
+        true
+      );
       setMessage(`${capitalize(bossPokemon?.name ?? 'Opponent')} was defeated (debug).`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The opponent could not be defeated.');
@@ -394,6 +478,8 @@ export function useBattleController() {
     area,
     totalCells,
     cells,
+    statuses,
+    statusFresh,
     bossRemaining,
     bossDefeated,
     bossCaught,

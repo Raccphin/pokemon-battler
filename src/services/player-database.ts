@@ -1,9 +1,15 @@
-import * as SQLite from 'expo-sqlite';
+import * as SQLite from "expo-sqlite";
 
-import { getRandomArea } from '@/services/area-progression';
-import type { HealingItem, Inventory, PartyMember, PlayerProfile } from '@/types/game';
+import { getRandomArea } from "@/services/area-progression";
+import type {
+  HealingItem,
+  Inventory,
+  PartyMember,
+  PlayerProfile,
+  StatusEffect,
+} from "@/types/game";
 
-const DATABASE_NAME = 'pokemon-raid-battler.db';
+const DATABASE_NAME = "pokemon-raid-battler.db";
 
 interface SaveRow {
   starter_selected: number;
@@ -12,6 +18,8 @@ interface SaveRow {
   opponent_level: number;
   opponent_is_area_boss: number;
   opponent_cells: string;
+  opponent_statuses: string;
+  opponent_status_fresh: string;
   encounter_complete: number;
   area_id: string;
   area_number: number;
@@ -36,28 +44,102 @@ interface PartyRow {
 
 function parseCells(value: string): boolean[] {
   const parsed: unknown = JSON.parse(value);
-  if (!Array.isArray(parsed) || !parsed.every((cell) => typeof cell === 'boolean')) {
-    throw new Error('The saved boss grid is invalid. The save could not be loaded.');
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((cell) => typeof cell === "boolean")
+  ) {
+    throw new Error(
+      "The saved boss grid is invalid. The save could not be loaded.",
+    );
+  }
+  return parsed;
+}
+
+function isStatusEffect(value: unknown): value is StatusEffect {
+  return (
+    value === "burn" ||
+    value === "poison" ||
+    value === "freeze" ||
+    value === "paralysis" ||
+    value === "sleep"
+  );
+}
+
+function parseStatuses(
+  value: string,
+  cellCount: number,
+): (StatusEffect | null)[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) {
+    throw new Error(
+      "The saved boss-grid status effects are invalid. The save could not be loaded.",
+    );
+  }
+  if (parsed.length === 0) {
+    return Array.from({ length: cellCount }, () => null);
+  }
+  if (
+    parsed.length !== cellCount ||
+    !parsed.every((status) => status === null || isStatusEffect(status))
+  ) {
+    throw new Error(
+      "The saved boss-grid status effects are invalid. The save could not be loaded.",
+    );
+  }
+  return parsed.map((status) => (isStatusEffect(status) ? status : null));
+}
+
+function parseStatusFresh(value: string, cellCount: number): boolean[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) {
+    throw new Error(
+      "The saved boss-grid status timing is invalid. The save could not be loaded.",
+    );
+  }
+  if (parsed.length === 0) {
+    return Array.from({ length: cellCount }, () => false);
+  }
+  if (
+    parsed.length !== cellCount ||
+    !parsed.every((fresh) => typeof fresh === "boolean")
+  ) {
+    throw new Error(
+      "The saved boss-grid status timing is invalid. The save could not be loaded.",
+    );
   }
   return parsed;
 }
 
 function parseIds(value: string): number[] {
   const parsed: unknown = JSON.parse(value);
-  if (!Array.isArray(parsed) || !parsed.every((id) => Number.isInteger(id) && id > 0)) {
-    throw new Error('The saved special-boss history is invalid. The save could not be loaded.');
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((id) => Number.isInteger(id) && id > 0)
+  ) {
+    throw new Error(
+      "The saved special-boss history is invalid. The save could not be loaded.",
+    );
   }
   return parsed;
 }
 
 function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
+  const opponentCells = parseCells(save.opponent_cells);
   return {
     starterSelected: Boolean(save.starter_selected),
     activeSlot: save.active_slot,
     opponentId: save.opponent_id,
     opponentLevel: save.opponent_level,
     opponentIsAreaBoss: Boolean(save.opponent_is_area_boss),
-    opponentCells: parseCells(save.opponent_cells),
+    opponentCells,
+    opponentStatuses: parseStatuses(
+      save.opponent_statuses,
+      opponentCells.length,
+    ),
+    opponentStatusFresh: parseStatusFresh(
+      save.opponent_status_fresh,
+      opponentCells.length,
+    ),
     encounterComplete: Boolean(save.encounter_complete),
     areaId: save.area_id,
     areaNumber: save.area_number,
@@ -96,6 +178,8 @@ export async function openPlayerDatabase(): Promise<{
       opponent_level INTEGER NOT NULL DEFAULT 1,
       opponent_is_area_boss INTEGER NOT NULL DEFAULT 0,
       opponent_cells TEXT NOT NULL,
+      opponent_statuses TEXT NOT NULL DEFAULT '[]',
+      opponent_status_fresh TEXT NOT NULL DEFAULT '[]',
       encounter_complete INTEGER NOT NULL,
       area_id TEXT NOT NULL DEFAULT 'forest',
       area_number INTEGER NOT NULL DEFAULT 1,
@@ -118,53 +202,61 @@ export async function openPlayerDatabase(): Promise<{
     );
   `);
   const columns = await database.getAllAsync<{ name: string }>(
-    'PRAGMA table_info(player_save)'
+    "PRAGMA table_info(player_save)",
   );
   const columnNames = new Set(columns.map((column) => column.name));
   const migrations: [string, string][] = [
-    ['starter_selected', 'INTEGER NOT NULL DEFAULT 1'],
-    ['opponent_level', 'INTEGER NOT NULL DEFAULT 1'],
-    ['opponent_is_area_boss', 'INTEGER NOT NULL DEFAULT 0'],
-    ['area_id', "TEXT NOT NULL DEFAULT 'forest'"],
-    ['area_number', 'INTEGER NOT NULL DEFAULT 1'],
-    ['encounter_index', 'INTEGER NOT NULL DEFAULT 0'],
-    ['used_special_boss_ids', "TEXT NOT NULL DEFAULT '[]'"],
-    ['money', 'INTEGER NOT NULL DEFAULT 0'],
-    ['shop_progress', 'INTEGER NOT NULL DEFAULT 0'],
+    ["starter_selected", "INTEGER NOT NULL DEFAULT 1"],
+    ["opponent_level", "INTEGER NOT NULL DEFAULT 1"],
+    ["opponent_is_area_boss", "INTEGER NOT NULL DEFAULT 0"],
+    ["opponent_statuses", "TEXT NOT NULL DEFAULT '[]'"],
+    ["opponent_status_fresh", "TEXT NOT NULL DEFAULT '[]'"],
+    ["area_id", "TEXT NOT NULL DEFAULT 'forest'"],
+    ["area_number", "INTEGER NOT NULL DEFAULT 1"],
+    ["encounter_index", "INTEGER NOT NULL DEFAULT 0"],
+    ["used_special_boss_ids", "TEXT NOT NULL DEFAULT '[]'"],
+    ["money", "INTEGER NOT NULL DEFAULT 0"],
+    ["shop_progress", "INTEGER NOT NULL DEFAULT 0"],
   ];
   for (const [name, definition] of migrations) {
     if (!columnNames.has(name)) {
-      await database.execAsync(`ALTER TABLE player_save ADD COLUMN ${name} ${definition}`);
+      await database.execAsync(
+        `ALTER TABLE player_save ADD COLUMN ${name} ${definition}`,
+      );
     }
   }
   const initialArea = getRandomArea();
   await database.runAsync(
     `INSERT OR IGNORE INTO player_save
       (id, starter_selected, active_slot, opponent_id, opponent_level, opponent_is_area_boss, opponent_cells,
-       encounter_complete, area_id, area_number, encounter_index, used_special_boss_ids,
-       money, shop_progress, poke_balls, great_balls, ultra_balls, potions, revives)
-      VALUES (1, 0, 0, ?, 1, 0, '[]', 0, ?, 1, 0, '[]', 0, 0, 5, 2, 1, 3, 1)`,
+       opponent_statuses, opponent_status_fresh, encounter_complete, area_id, area_number,
+       encounter_index, used_special_boss_ids, money, shop_progress, poke_balls, great_balls,
+       ultra_balls, potions, revives)
+      VALUES (1, 0, 0, ?, 1, 0, '[]', '[]', '[]', 0, ?, 1, 0, '[]', 0, 0, 5, 2, 1, 3, 1)`,
     initialArea.startingPokemonId,
-    initialArea.id
+    initialArea.id,
   );
-  const save = await database.getFirstAsync<SaveRow>('SELECT * FROM player_save WHERE id = 1');
+  const save = await database.getFirstAsync<SaveRow>(
+    "SELECT * FROM player_save WHERE id = 1",
+  );
   if (!save) {
-    throw new Error('The player save could not be initialized.');
+    throw new Error("The player save could not be initialized.");
   }
   const party = await database.getAllAsync<PartyRow>(
-    'SELECT * FROM party_member ORDER BY slot'
+    "SELECT * FROM party_member ORDER BY slot",
   );
   return { database, profile: toProfile(save, party) };
 }
 
 export async function persistPlayerProfile(
   database: SQLite.SQLiteDatabase,
-  profile: PlayerProfile
+  profile: PlayerProfile,
 ): Promise<void> {
   await database.withTransactionAsync(async () => {
     await database.runAsync(
       `UPDATE player_save SET active_slot = ?, opponent_id = ?, opponent_level = ?,
-       starter_selected = ?, opponent_is_area_boss = ?, opponent_cells = ?, encounter_complete = ?, area_id = ?,
+       starter_selected = ?, opponent_is_area_boss = ?, opponent_cells = ?, opponent_statuses = ?, opponent_status_fresh = ?,
+       encounter_complete = ?, area_id = ?,
        area_number = ?, encounter_index = ?, used_special_boss_ids = ?, money = ?,
        shop_progress = ?, poke_balls = ?, great_balls = ?, ultra_balls = ?, potions = ?,
        revives = ? WHERE id = 1`,
@@ -174,6 +266,8 @@ export async function persistPlayerProfile(
       Number(profile.starterSelected),
       Number(profile.opponentIsAreaBoss),
       JSON.stringify(profile.opponentCells),
+      JSON.stringify(profile.opponentStatuses),
+      JSON.stringify(profile.opponentStatusFresh),
       Number(profile.encounterComplete),
       profile.areaId,
       profile.areaNumber,
@@ -185,9 +279,9 @@ export async function persistPlayerProfile(
       profile.inventory.greatBall,
       profile.inventory.ultraBall,
       profile.inventory.potion,
-      profile.inventory.revive
+      profile.inventory.revive,
     );
-    await database.runAsync('DELETE FROM party_member');
+    await database.runAsync("DELETE FROM party_member");
     for (const member of profile.party) {
       await database.runAsync(
         `INSERT INTO party_member (slot, pokemon_id, current_hp, max_hp, level)
@@ -196,14 +290,14 @@ export async function persistPlayerProfile(
         member.pokemonId,
         member.currentHp,
         member.maxHp,
-        member.level
+        member.level,
       );
     }
   });
 }
 
 export async function resetPlayerSave(
-  database: SQLite.SQLiteDatabase
+  database: SQLite.SQLiteDatabase,
 ): Promise<PlayerProfile> {
   const initialArea = getRandomArea();
   await database.withTransactionAsync(async () => {
@@ -215,30 +309,32 @@ export async function resetPlayerSave(
        poke_balls = 5, great_balls = 2, ultra_balls = 1, potions = 3, revives = 1
        WHERE id = 1`,
       initialArea.startingPokemonId,
-      initialArea.id
+      initialArea.id,
     );
     if (result.changes !== 1) {
-      throw new Error('The player save could not be reset.');
+      throw new Error("The player save could not be reset.");
     }
-    await database.runAsync('DELETE FROM party_member');
+    await database.runAsync("DELETE FROM party_member");
   });
 
-  const save = await database.getFirstAsync<SaveRow>('SELECT * FROM player_save WHERE id = 1');
+  const save = await database.getFirstAsync<SaveRow>(
+    "SELECT * FROM player_save WHERE id = 1",
+  );
   if (!save) {
-    throw new Error('The reset player save could not be loaded.');
+    throw new Error("The reset player save could not be loaded.");
   }
   const party = await database.getAllAsync<PartyRow>(
-    'SELECT * FROM party_member ORDER BY slot'
+    "SELECT * FROM party_member ORDER BY slot",
   );
   return toProfile(save, party);
 }
 
-export function consumeBall(inventory: Inventory, ball: keyof Pick<
-  Inventory,
-  'pokeBall' | 'greatBall' | 'ultraBall'
->): Inventory {
+export function consumeBall(
+  inventory: Inventory,
+  ball: keyof Pick<Inventory, "pokeBall" | "greatBall" | "ultraBall">,
+): Inventory {
   if (inventory[ball] <= 0) {
-    throw new Error('You are out of that kind of Poké Ball.');
+    throw new Error("You are out of that kind of Poké Ball.");
   }
   return { ...inventory, [ball]: inventory[ball] - 1 };
 }
@@ -246,19 +342,25 @@ export function consumeBall(inventory: Inventory, ball: keyof Pick<
 export function applyHealingItem(
   member: PartyMember,
   inventory: Inventory,
-  item: HealingItem
+  item: HealingItem,
 ): { member: PartyMember; inventory: Inventory } {
-  if (item === 'potion') {
-    if (inventory.potion <= 0) throw new Error('You are out of Potions.');
-    if (member.currentHp <= 0) throw new Error('Use a Revive on a fainted Pokémon.');
-    if (member.currentHp >= member.maxHp) throw new Error('That Pokémon already has full HP.');
+  if (item === "potion") {
+    if (inventory.potion <= 0) throw new Error("You are out of Potions.");
+    if (member.currentHp <= 0)
+      throw new Error("Use a Revive on a fainted Pokémon.");
+    if (member.currentHp >= member.maxHp)
+      throw new Error("That Pokémon already has full HP.");
     return {
-      member: { ...member, currentHp: Math.min(member.maxHp, member.currentHp + 30) },
+      member: {
+        ...member,
+        currentHp: Math.min(member.maxHp, member.currentHp + 30),
+      },
       inventory: { ...inventory, potion: inventory.potion - 1 },
     };
   }
-  if (inventory.revive <= 0) throw new Error('You are out of Revives.');
-  if (member.currentHp > 0) throw new Error('Revives can only be used on a fainted Pokémon.');
+  if (inventory.revive <= 0) throw new Error("You are out of Revives.");
+  if (member.currentHp > 0)
+    throw new Error("Revives can only be used on a fainted Pokémon.");
   return {
     member: { ...member, currentHp: Math.ceil(member.maxHp / 2) },
     inventory: { ...inventory, revive: inventory.revive - 1 },

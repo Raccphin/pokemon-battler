@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
 
 import { MoveCard } from '@/components/battle/move-card';
 import { AreaBackground } from '@/components/battle/area-background';
@@ -8,6 +9,7 @@ import { PokemonSprite } from '@/components/pokemon-sprite';
 import { ScreenState } from '@/components/screen-state';
 import { ThemedText } from '@/components/themed-text';
 import { useBattleController } from '@/hooks/use-battle-controller';
+import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
 import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
 import { getMoveLabel } from '@/services/battle-rules';
 import { SHOP_CONFIG } from '@/services/shop';
@@ -298,21 +300,34 @@ export default function BattleScreen() {
                 {Array.from({ length: dimensions.columns }, (_, column) => {
                   const index = row * dimensions.columns + column;
                   const active = battle.cells[index];
+                  const status = battle.statuses[index];
+                  const statusPresentation = status
+                    ? STATUS_EFFECT_PRESENTATION[status]
+                    : null;
                   const ball = battle.catchAnimation?.positions.includes(index) ?? false;
                   return (
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={`Boss grid row ${row + 1}, column ${column + 1}, ${active ? 'occupied' : 'cleared'}`}
+                      accessibilityLabel={`Boss grid row ${row + 1}, column ${column + 1}, ${statusPresentation ? `${statusPresentation.label} status, ${active ? 'occupied' : 'cleared'}` : active ? 'occupied' : 'cleared'}`}
                       disabled={battle.busy || !battle.canBattle || !battle.selectedMove}
                       key={index}
                       onPress={() => battle.handleGridCell(row, column)}
                       style={[
                         styles.gridCell,
                         active ? styles.gridCellActive : styles.gridCellCleared,
+                        statusPresentation && {
+                          backgroundColor: statusPresentation.color,
+                        },
                         ball && styles.gridCellBall,
                       ]}>
                       {ball ? (
                         <Text style={styles.ballGlyph}>●</Text>
+                      ) : statusPresentation ? (
+                        <Image
+                          contentFit="contain"
+                          source={statusPresentation.icon}
+                          style={styles.gridCellStatusIcon}
+                        />
                       ) : active ? (
                         <View style={styles.cellDot} />
                       ) : (
@@ -701,6 +716,10 @@ const styles = StyleSheet.create({
   },
   gridCellCleared: {
     backgroundColor: '#e5eee2',
+  },
+  gridCellStatusIcon: {
+    width: '64%',
+    height: '64%',
   },
   gridCellBall: {
     backgroundColor: '#ffffff',
