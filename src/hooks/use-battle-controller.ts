@@ -33,12 +33,19 @@ import { rumble } from '@/services/haptics';
 import {
   fetchPokemon,
   fetchPokemonClassification,
+  fetchPokemonEvolutions,
   fetchPokemonIdsForTypes,
   fetchPokemonLevelUpMoves,
 } from '@/services/pokeapi';
+import { getNewlyUnlockedEvolutions } from '@/services/evolution-rules';
 import { chooseOpponentMoveNames, getInitialMoveNames } from '@/services/move-learning';
 import { usePlayer } from '@/providers/player-provider';
-import type { BallType, PokemonMove, StatusEffect } from '@/types/game';
+import type {
+  BallType,
+  PendingEvolution,
+  PokemonMove,
+  StatusEffect,
+} from '@/types/game';
 
 const sleep = (duration: number) => new Promise((resolve) => setTimeout(resolve, duration));
 const EMPTY_GRID_CELLS: boolean[] = [];
@@ -78,6 +85,8 @@ export function useBattleController() {
     initializeOpponentMoves,
     learnMove,
     skipMoveUnlock,
+    evolvePokemon,
+    deferEvolution,
   } = usePlayer();
   const profile = state.status === 'ready' ? state.profile : null;
   const activeMember = profile?.party.find((member) => member.slot === profile.activeSlot);
@@ -524,7 +533,11 @@ export function useBattleController() {
       if (opponentId === undefined) {
         throw new Error(`No eligible Pokémon were found for the ${nextArea.name}.`);
       }
-      const [opponentLearnset, newlyUnlockedMovesByMember] = await Promise.all([
+      const [
+        opponentLearnset,
+        newlyUnlockedMovesByMember,
+        newlyUnlockedEvolutionsByMember,
+      ] = await Promise.all([
         queryClient.fetchQuery({
           queryKey: ['pokemon-level-up-moves', opponentId, next.opponentLevel],
           queryFn: () => fetchPokemonLevelUpMoves(opponentId, next.opponentLevel),
@@ -549,6 +562,28 @@ export function useBattleController() {
               : null;
           })
         ),
+        Promise.all(
+          profile.party.map(async (member): Promise<PendingEvolution | null> => {
+            if (nextPlayerLevel <= member.level) return null;
+            const evolutions = await queryClient.fetchQuery({
+              queryKey: ['pokemon-evolutions', member.pokemonId],
+              queryFn: () => fetchPokemonEvolutions(member.pokemonId),
+            });
+            const options = getNewlyUnlockedEvolutions(
+              evolutions,
+              member.level,
+              nextPlayerLevel
+            );
+            return options.length > 0
+              ? {
+                  slot: member.slot,
+                  pokemonId: member.pokemonId,
+                  options,
+                  prompted: false,
+                }
+              : null;
+          })
+        ),
       ]);
       await advanceEncounter(
         opponentId,
@@ -557,6 +592,9 @@ export function useBattleController() {
         chooseOpponentMoveNames(opponentLearnset),
         newlyUnlockedMovesByMember.filter(
           (unlock): unlock is NonNullable<typeof unlock> => unlock !== null
+        ),
+        newlyUnlockedEvolutionsByMember.filter(
+          (evolution): evolution is NonNullable<typeof evolution> => evolution !== null
         ),
         specialBossId,
         fromShop
@@ -751,6 +789,8 @@ export function useBattleController() {
     selectedPattern,
     learnMove,
     skipMoveUnlock,
+    evolvePokemon,
+    deferEvolution,
     busy,
     message,
     operationError,

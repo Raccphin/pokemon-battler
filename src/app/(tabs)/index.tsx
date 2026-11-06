@@ -12,7 +12,7 @@ import { ThemedText } from '@/components/themed-text';
 import { useBattleController } from '@/hooks/use-battle-controller';
 import { STATUS_EFFECT_PRESENTATION } from '@/constants/status-effects';
 import { AREA_PROGRESSION_CONFIG } from '@/services/area-progression';
-import { getMoveLabel } from '@/services/battle-rules';
+import { getMoveLabel, getPlayerMaxHp } from '@/services/battle-rules';
 import { SHOP_CONFIG } from '@/services/shop';
 import { fetchPokemon } from '@/services/pokeapi';
 import type { PokemonMove } from '@/types/game';
@@ -31,12 +31,24 @@ export default function BattleScreen() {
   const [confirmMoveReplacement, setConfirmMoveReplacement] = useState(false);
   const [moveLearningError, setMoveLearningError] = useState<string | null>(null);
   const [savingMove, setSavingMove] = useState(false);
+  const [savingEvolution, setSavingEvolution] = useState(false);
+  const [evolutionError, setEvolutionError] = useState<string | null>(null);
   const battle = useBattleController();
   const partyPokemonQueries = useQueries({
     queries:
       battle.profile?.party.map((member) => ({
         queryKey: ['pokemon', member.pokemonId, member.moves],
         queryFn: () => fetchPokemon(member.pokemonId, member.moves),
+      })) ?? [],
+  });
+  const pendingEvolution = battle.profile?.pendingEvolutions.find(
+    (evolution) => !evolution.prompted
+  );
+  const evolutionPokemonQueries = useQueries({
+    queries:
+      pendingEvolution?.options.map((option) => ({
+        queryKey: ['pokemon', option.pokemonId, []],
+        queryFn: () => fetchPokemon(option.pokemonId),
       })) ?? [],
   });
   const pathname = usePathname();
@@ -120,6 +132,9 @@ export default function BattleScreen() {
     );
   }
   const profile = battle.state.profile;
+  const activeEvolution = profile.pendingEvolutions.find(
+    (evolution) => !evolution.prompted
+  );
   const activeMember = profile.party.find((member) => member.slot === profile.activeSlot);
   const selectedUnlock =
     profile.pendingMoveUnlocks.find((unlock) => unlock.slot === selectedUnlockSlot) ??
@@ -610,7 +625,109 @@ export default function BattleScreen() {
       <Modal
         animationType="fade"
         transparent
-        visible={profile.pendingMoveUnlocks.length > 0}
+        visible={activeEvolution !== undefined}
+        onRequestClose={() => {
+          if (activeEvolution) {
+            void battle.deferEvolution(activeEvolution.slot, activeEvolution.pokemonId).catch(
+              (error: unknown) =>
+                setEvolutionError(
+                  error instanceof Error ? error.message : 'The evolution choice could not be saved.'
+                )
+            );
+          }
+        }}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.evolutionModal}>
+            <Text style={styles.modalEyebrow}>LEVEL UP</Text>
+            <Text style={styles.modalTitle}>Ready to evolve?</Text>
+            <Text style={styles.modalDescription}>
+              Choose an evolution now, or wait and evolve this Pokémon for free in the shop.
+            </Text>
+            {activeEvolution?.options.map((option, index) => {
+              const query = evolutionPokemonQueries[index];
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={savingEvolution || !query?.data}
+                  key={option.pokemonId}
+                  onPress={async () => {
+                    if (!activeEvolution || !query?.data) return;
+                    setSavingEvolution(true);
+                    setEvolutionError(null);
+                    try {
+                      await battle.evolvePokemon(
+                        activeEvolution.slot,
+                        option.pokemonId,
+                        getPlayerMaxHp(query.data.stats.hp),
+                        option.minimumLevel,
+                        'level-up'
+                      );
+                    } catch (error) {
+                      setEvolutionError(
+                        error instanceof Error
+                          ? error.message
+                          : 'The Pokémon could not evolve.'
+                      );
+                    } finally {
+                      setSavingEvolution(false);
+                    }
+                  }}
+                  style={[styles.evolutionOption, !query?.data && styles.disabledButton]}>
+                  {query?.data ? (
+                    <PokemonSprite pokemon={query.data} size={38} />
+                  ) : null}
+                  <Text style={styles.optionText}>
+                    {query?.isPending
+                      ? 'Loading evolution…'
+                      : `Evolve into ${capitalize(option.name)}`}
+                  </Text>
+                </Pressable>
+              );
+            })}
+            {evolutionPokemonQueries.some((query) => query.error) ? (
+              <View style={styles.replacementError}>
+                <Text style={styles.modalError}>Evolution data could not be loaded.</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() =>
+                    void Promise.all(
+                      evolutionPokemonQueries.map((query) => query.refetch())
+                    )
+                  }
+                  style={styles.retryNamesButton}>
+                  <Text style={styles.retryNamesText}>Retry</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {evolutionError ? <Text style={styles.modalError}>{evolutionError}</Text> : null}
+            <Pressable
+              accessibilityRole="button"
+              disabled={savingEvolution}
+              onPress={() => {
+                if (!activeEvolution) return;
+                setEvolutionError(null);
+                void battle
+                  .deferEvolution(activeEvolution.slot, activeEvolution.pokemonId)
+                  .catch((error: unknown) =>
+                    setEvolutionError(
+                      error instanceof Error
+                        ? error.message
+                        : 'The evolution choice could not be saved.'
+                    )
+                  );
+              }}
+              style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>
+                {savingEvolution ? 'SAVING…' : 'NOT NOW'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={profile.pendingMoveUnlocks.length > 0 && activeEvolution === undefined}
         onRequestClose={() => undefined}>
         <View style={styles.modalBackdrop}>
           <View style={styles.moveLearningModal}>
@@ -1268,6 +1385,24 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     backgroundColor: '#fffaf2',
     gap: 10,
+  },
+  evolutionModal: {
+    maxHeight: '90%',
+    padding: 18,
+    borderRadius: 22,
+    backgroundColor: '#fffaf2',
+    gap: 10,
+  },
+  evolutionOption: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e8dfd2',
+    backgroundColor: '#ffffff',
   },
   modalEyebrow: {
     color: '#b86d51',

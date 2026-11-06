@@ -5,6 +5,7 @@ import type {
   HealingItem,
   Inventory,
   PartyMember,
+  PendingEvolution,
   PendingMoveUnlock,
   PlayerProfile,
   RunStatus,
@@ -27,6 +28,7 @@ interface SaveRow {
   opponent_moves: string;
   opponent_moves_initialized: number;
   pending_move_unlocks: string;
+  pending_evolutions: string;
   encounter_complete: number;
   area_id: string;
   area_number: number;
@@ -290,6 +292,36 @@ function parsePendingMoveUnlocks(value: string): PlayerProfile["pendingMoveUnloc
   }));
 }
 
+function isPendingEvolution(value: unknown): value is PendingEvolution {
+  if (!isRecord(value) || !Array.isArray(value.options)) return false;
+  return (
+    isNonNegativeInteger(value.slot) &&
+    isPositiveInteger(value.pokemonId) &&
+    typeof value.prompted === "boolean" &&
+    value.options.every(
+      (option: unknown) =>
+        isRecord(option) &&
+        isPositiveInteger(option.pokemonId) &&
+        typeof option.name === "string" &&
+        option.name.length > 0 &&
+        isPositiveInteger(option.minimumLevel),
+    )
+  );
+}
+
+function parsePendingEvolutions(value: string): PlayerProfile["pendingEvolutions"] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed) || !parsed.every(isPendingEvolution)) {
+    throw new Error("The saved Pokémon evolutions are invalid. The save could not be loaded.");
+  }
+  return parsed.map((entry) => ({
+    slot: entry.slot,
+    pokemonId: entry.pokemonId,
+    prompted: entry.prompted,
+    options: entry.options.map((option) => ({ ...option })),
+  }));
+}
+
 function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
   const opponentCells = parseCells(save.opponent_cells);
   const runStatus = parseRunStatus(save.run_status);
@@ -316,6 +348,7 @@ function toProfile(save: SaveRow, party: PartyRow[]): PlayerProfile {
     opponentMoves: parseMoveNames(save.opponent_moves),
     opponentMovesInitialized: Boolean(save.opponent_moves_initialized),
     pendingMoveUnlocks: parsePendingMoveUnlocks(save.pending_move_unlocks),
+    pendingEvolutions: parsePendingEvolutions(save.pending_evolutions),
     encounterComplete: Boolean(save.encounter_complete),
     areaId: save.area_id,
     areaNumber: save.area_number,
@@ -363,6 +396,7 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
       opponent_moves TEXT NOT NULL DEFAULT '[]',
       opponent_moves_initialized INTEGER NOT NULL DEFAULT 0,
       pending_move_unlocks TEXT NOT NULL DEFAULT '[]',
+      pending_evolutions TEXT NOT NULL DEFAULT '[]',
       encounter_complete INTEGER NOT NULL,
       area_id TEXT NOT NULL DEFAULT 'forest',
       area_number INTEGER NOT NULL DEFAULT 1,
@@ -404,6 +438,7 @@ export async function openPlayerDatabaseConnection(): Promise<SQLite.SQLiteDatab
     ["opponent_moves", "TEXT NOT NULL DEFAULT '[]'"],
     ["opponent_moves_initialized", "INTEGER NOT NULL DEFAULT 0"],
     ["pending_move_unlocks", "TEXT NOT NULL DEFAULT '[]'"],
+    ["pending_evolutions", "TEXT NOT NULL DEFAULT '[]'"],
     ["area_id", "TEXT NOT NULL DEFAULT 'forest'"],
     ["area_number", "INTEGER NOT NULL DEFAULT 1"],
     ["encounter_index", "INTEGER NOT NULL DEFAULT 0"],
@@ -485,6 +520,7 @@ export async function persistPlayerProfile(
       `UPDATE player_save SET active_slot = ?, opponent_id = ?, opponent_level = ?,
        starter_selected = ?, opponent_is_area_boss = ?, opponent_cells = ?, opponent_statuses = ?, opponent_status_fresh = ?,
        opponent_grid_version = ?, opponent_moves = ?, opponent_moves_initialized = ?, pending_move_unlocks = ?,
+       pending_evolutions = ?,
        encounter_complete = ?, area_id = ?,
        area_number = ?, encounter_index = ?, used_special_boss_ids = ?, money = ?,
        shop_progress = ?, run_status = ?, run_summary = ?, pending_catch = ?,
@@ -501,6 +537,7 @@ export async function persistPlayerProfile(
       JSON.stringify(profile.opponentMoves),
       Number(profile.opponentMovesInitialized),
       JSON.stringify(profile.pendingMoveUnlocks),
+      JSON.stringify(profile.pendingEvolutions),
       Number(profile.encounterComplete),
       profile.areaId,
       profile.areaNumber,
@@ -546,6 +583,7 @@ export async function resetPlayerSave(
        opponent_level = 1, opponent_is_area_boss = 0, opponent_cells = '[]',
        opponent_statuses = '[]', opponent_status_fresh = '[]', opponent_grid_version = 0,
        opponent_moves = '[]', opponent_moves_initialized = 0, pending_move_unlocks = '[]',
+       pending_evolutions = '[]',
        encounter_complete = 0, area_id = ?, area_number = 1, encounter_index = 0,
        used_special_boss_ids = '[]', money = 0, shop_progress = 0,
        run_status = 'active', run_summary = 'null', pending_catch = 'null',
