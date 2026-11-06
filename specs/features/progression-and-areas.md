@@ -27,6 +27,8 @@
   - Dojo: Fighting, Psychic, Steel
 - Each area has 10 encounter stages. The tenth is the area boss; the two future shop positions temporarily spawn regular Pokémon encounters.
 - Start at level 1 and increase the level by 5 when entering each new area. Apply the current area level to the player's party and opponents.
+- When a party member's level increases, present its newly unlocked supported level-up moves before the next encounter; see `raid-battle.md` for move-learning and replacement rules.
+- Select each opponent's move pool from supported level-up moves available at its encounter level; see `raid-battle.md` for pool size, selection, and persistence.
 - Area bosses use the same encounter and battle rules as other Pokémon, with a 25% chance to be a type-matching legendary or mythical. Bosses have 25% increased Attack and one extra row and column in their HP grid.
 - A legendary or mythical selected as an area boss is recorded immediately and cannot appear again later in the run, whether or not it is caught.
 - Persist area identity, area number, encounter stage, opponent level and boss status, grid progress, and used special-boss IDs in SQLite.
