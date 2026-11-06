@@ -298,7 +298,7 @@ export default function BattleScreen() {
               {capitalize(bossPokemon.name)}
             </ThemedText>
             <ThemedText style={styles.fighterType}>
-              {profile.opponentIsAreaBoss ? 'AREA BOSS' : 'OPPONENT'}
+              {bossPokemon.types.join(' · ')}
             </ThemedText>
             <ThemedText style={styles.levelText}>LV. {profile.opponentLevel}</ThemedText>
           </View>
